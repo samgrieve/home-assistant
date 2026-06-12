@@ -14,7 +14,14 @@
   const SUBJECT_COLORS = {
     maths: ["#6C5CE7", "#8E7CF8"],
     english: ["#00B894", "#26D0A8"],
+    challenge: ["#d63031", "#e84393"],
   };
+
+  const ARCADE_CATEGORIES = [
+    { id: "synonyms", label: "Synonyms", emoji: "📖", blurb: "Words that mean the same" },
+    { id: "antonyms", label: "Antonyms", emoji: "🔄", blurb: "Words that mean the opposite" },
+    { id: "homophones", label: "Homophones", emoji: "👯", blurb: "Words that sound the same" },
+  ];
 
   const PRAISE = ["Brilliant!", "Nailed it!", "Super!", "You star!", "Wowza!", "Genius!"];
   const NUDGE = ["Nearly!", "Good try!", "Keep going!", "You'll get it!"];
@@ -39,6 +46,12 @@
         celebrating: false,
         entry: { value: "", remainder: "", field: "value", letters: [], usedTiles: [] },
         busy: false,
+        bossHits: 0,
+        arcadeResults: null,
+      };
+      this.A = null; // live Fly Snap state — never touched by _render()
+      this._onVisibility = () => {
+        if (document.hidden && this.A && this.A.phase === "play") this._arcadePause();
       };
       this._initialized = false;
       this._audio = null;
@@ -138,6 +151,7 @@
         this.S.session = { session_id: res.session_id, total: res.total };
         this.S.mode = modeId;
         this.S.screen = "game";
+        this.S.bossHits = 0;
         this._setQuestion(res.question);
       } catch (err) {
         this._setError("Couldn't start the game. Give it another go!");
@@ -191,6 +205,7 @@
           ? PRAISE[Math.floor(Math.random() * PRAISE.length)]
           : NUDGE[Math.floor(Math.random() * NUDGE.length)],
       };
+      if (res.correct) this.S.bossHits += 1;
       this._render();
       if (res.correct) {
         this._sound("correct");
@@ -394,6 +409,388 @@
       return out;
     }
 
+    // ------------------------------------------------------------ Fly Snap arcade
+
+    async _startArcade(category) {
+      if (this.S.busy) return;
+      this.S.busy = true;
+      try {
+        const res = await this._ws({
+          type: "learning_games/start_arcade",
+          profile_id: this.S.profile.profile_id,
+          category,
+        });
+        this.A = {
+          game: res,
+          category,
+          round: 1,
+          lives: res.lives,
+          phase: "intro",
+          pairIdx: 0,
+          pairs: [],
+          flies: [],
+          frogWord: "",
+          matchIdx: -1,
+          timeLeft: res.round_time_s,
+          lastTs: 0,
+          raf: 0,
+          lockedUntil: 0,
+          correct: 0,
+          wrong: 0,
+          roundsCompleted: 0,
+          roundsPlayed: 0,
+        };
+        document.addEventListener("visibilitychange", this._onVisibility);
+        this.S.screen = "arcade";
+        this._render();
+        this._arcadeBind();
+        this._arcadeOverlay(`Round 1`, "Tap the fly that matches the frog's word!", "Start");
+      } catch (err) {
+        this._setError("Couldn't start Fly Snap. Give it another go!");
+      } finally {
+        this.S.busy = false;
+      }
+    }
+
+    _arcadeEls() {
+      const root = this.shadowRoot;
+      return {
+        pond: root.getElementById("pond"),
+        frogword: root.getElementById("frogword"),
+        bar: root.getElementById("abar-fill"),
+        lives: root.getElementById("alives"),
+        roundLabel: root.getElementById("around"),
+        overlay: root.getElementById("aoverlay"),
+        flies: Array.from(root.querySelectorAll(".fly")),
+      };
+    }
+
+    _arcadeBind() {
+      const els = this._arcadeEls();
+      els.flies.forEach((el, i) => {
+        el.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          this._onFlySnap(i);
+        });
+      });
+      els.overlay.addEventListener("pointerdown", () => this._arcadeOverlayTap());
+      this._arcadeUpdateHud();
+    }
+
+    _arcadeOverlay(title, sub, button) {
+      const els = this._arcadeEls();
+      els.overlay.innerHTML = `
+        <div class="ao-title">${esc(title)}</div>
+        ${sub ? `<div class="ao-sub">${esc(sub)}</div>` : ""}
+        ${button ? `<div class="ao-btn">${esc(button)}</div>` : ""}`;
+      els.overlay.classList.add("show");
+    }
+
+    _arcadeOverlayTap() {
+      const A = this.A;
+      if (!A) return;
+      if (A.phase === "intro" || A.phase === "roundWon" || A.phase === "roundLost") {
+        this._arcadeBeginRound();
+      } else if (A.phase === "paused") {
+        this._arcadeResume();
+      }
+    }
+
+    _arcadeBeginRound() {
+      const A = this.A;
+      const els = this._arcadeEls();
+      els.overlay.classList.remove("show");
+      A.phase = "play";
+      A.timeLeft = A.game.round_time_s;
+      A.pairs = [...A.game.rounds_data[A.round - 1].pairs];
+      A.decoys = [...A.game.rounds_data[A.round - 1].decoys];
+      A.pairIdx = 0;
+      this._shuffle(A.pairs);
+      A.flies = els.flies.map((el) => ({ el, x: 0, y: 0, word: "" }));
+      A.flies.forEach((f) => this._flyToEdge(f));
+      this._arcadeDealAll();
+      A.lastTs = performance.now();
+      this._arcadeUpdateHud();
+      A.raf = requestAnimationFrame((ts) => this._arcadeTick(ts));
+    }
+
+    _shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    }
+
+    _pondSize() {
+      const pond = this._arcadeEls().pond;
+      return { w: pond.clientWidth, h: pond.clientHeight };
+    }
+
+    _flyToEdge(fly) {
+      const { w, h } = this._pondSize();
+      const angle = Math.random() * Math.PI * 2;
+      fly.x = w / 2 + Math.cos(angle) * (w / 2 - 8);
+      fly.y = h / 2 + Math.sin(angle) * (h / 2 - 8);
+      fly.wobblePhase = Math.random() * Math.PI * 2;
+      this._flyPaint(fly);
+    }
+
+    _flyPaint(fly) {
+      fly.el.style.transform = `translate(${fly.x - 33}px, ${fly.y - 33}px)`;
+    }
+
+    _nextPair() {
+      const A = this.A;
+      if (A.pairIdx >= A.pairs.length) {
+        this._shuffle(A.pairs);
+        A.pairIdx = 0;
+      }
+      return A.pairs[A.pairIdx++];
+    }
+
+    _freshDecoys(count, exclude) {
+      const A = this.A;
+      const pool = A.decoys.filter((w) => !exclude.has(w));
+      this._shuffle(pool);
+      return pool.slice(0, count);
+    }
+
+    _arcadeDealAll() {
+      const A = this.A;
+      const pair = this._nextPair();
+      A.frogWord = pair.t;
+      A.matchIdx = Math.floor(Math.random() * 6);
+      const exclude = new Set([pair.t, pair.m]);
+      const decoys = this._freshDecoys(5, exclude);
+      A.flies.forEach((fly, i) => {
+        fly.word = i === A.matchIdx ? pair.m : decoys.pop() || pair.t.split("").reverse().join("");
+        fly.el.querySelector(".flyword").textContent = fly.word;
+      });
+      this._arcadeEls().frogword.textContent = A.frogWord;
+    }
+
+    _arcadeReDeal(snappedIdx) {
+      // Faithful to the original game: the snapped fly resets with a fresh
+      // decoy; the NEW match word lands on one of the flies still in flight.
+      const A = this.A;
+      const pair = this._nextPair();
+      A.frogWord = pair.t;
+      const others = [0, 1, 2, 3, 4, 5].filter((i) => i !== snappedIdx);
+      A.matchIdx = others[Math.floor(Math.random() * others.length)];
+      const shown = new Set(A.flies.map((f) => f.word));
+      shown.add(pair.t);
+      shown.add(pair.m);
+      const fresh = this._freshDecoys(1, shown);
+      A.flies[snappedIdx].word = fresh[0] || A.flies[snappedIdx].word;
+      A.flies[A.matchIdx].word = pair.m;
+      A.flies.forEach((fly) => {
+        fly.el.querySelector(".flyword").textContent = fly.word;
+      });
+      this._arcadeEls().frogword.textContent = A.frogWord;
+    }
+
+    _onFlySnap(i) {
+      const A = this.A;
+      if (!A || A.phase !== "play") return;
+      const now = performance.now();
+      if (now < A.lockedUntil) return;
+      const fly = A.flies[i];
+      if (i === A.matchIdx) {
+        A.correct += 1;
+        this._sound("correct");
+        const frog = this.shadowRoot.getElementById("frog");
+        frog.classList.remove("snap");
+        void frog.offsetWidth; // restart the animation
+        frog.classList.add("snap");
+        this._flyToEdge(fly);
+        this._arcadeReDeal(i);
+      } else {
+        A.wrong += 1;
+        A.lockedUntil = now + 1000;
+        this._sound("wrong");
+        fly.el.classList.remove("shake");
+        void fly.el.offsetWidth;
+        fly.el.classList.add("shake");
+        this._arcadeEls().pond.classList.add("locked");
+        setTimeout(() => {
+          const els = this._arcadeEls();
+          if (els.pond) els.pond.classList.remove("locked");
+        }, 1000);
+      }
+    }
+
+    _arcadeTick(ts) {
+      const A = this.A;
+      if (!A || A.phase !== "play") return;
+      let dt = (ts - A.lastTs) / 1000;
+      A.lastTs = ts;
+      if (dt > 0.5) dt = 0.016; // tab was hidden / long frame — don't teleport
+      A.timeLeft -= dt;
+
+      const { w, h } = this._pondSize();
+      const cx = w / 2;
+      const cy = h / 2;
+      const travel = A.game.travel_s[A.round - 1];
+      const speed = Math.min(w, h) / 2 / travel; // px per second
+      let lost = false;
+
+      for (const fly of A.flies) {
+        const dx = cx - fly.x;
+        const dy = cy - fly.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        fly.wobblePhase += dt * 5;
+        const wobble = Math.sin(fly.wobblePhase) * 14;
+        fly.x += (dx / dist) * speed * dt + (-dy / dist) * wobble * dt;
+        fly.y += (dy / dist) * speed * dt + (dx / dist) * wobble * dt;
+        this._flyPaint(fly);
+        if (dist < 46) lost = true;
+      }
+
+      const els = this._arcadeEls();
+      els.bar.style.transform = `scaleX(${Math.max(0, A.timeLeft / A.game.round_time_s)})`;
+
+      if (lost) {
+        this._arcadeRoundLost();
+        return;
+      }
+      if (A.timeLeft <= 0) {
+        this._arcadeRoundWon();
+        return;
+      }
+      A.raf = requestAnimationFrame((t) => this._arcadeTick(t));
+    }
+
+    _arcadeRoundWon() {
+      const A = this.A;
+      cancelAnimationFrame(A.raf);
+      A.roundsCompleted += 1;
+      A.roundsPlayed += 1;
+      this._sound("finish");
+      this._burstConfetti(60);
+      if (A.round >= A.game.rounds) {
+        this._arcadeFinish(true);
+        return;
+      }
+      A.round += 1;
+      A.phase = "roundWon";
+      this._arcadeUpdateHud();
+      this._arcadeOverlay(
+        `Round ${A.round - 1} cleared! 🎉`,
+        `Round ${A.round} — the flies are getting faster…`,
+        "Go!"
+      );
+    }
+
+    _arcadeRoundLost() {
+      const A = this.A;
+      cancelAnimationFrame(A.raf);
+      A.lives -= 1;
+      A.roundsPlayed += 1;
+      this._sound("wrong");
+      if (A.lives <= 0) {
+        this._arcadeFinish(false);
+        return;
+      }
+      A.phase = "roundLost";
+      this._arcadeUpdateHud();
+      this._arcadeOverlay(
+        "A fly reached the lilypad! 😱",
+        `${A.lives} ${A.lives === 1 ? "life" : "lives"} left — try round ${A.round} again`,
+        "Try again"
+      );
+    }
+
+    _arcadePause() {
+      const A = this.A;
+      if (!A || A.phase !== "play") return;
+      cancelAnimationFrame(A.raf);
+      A.phase = "paused";
+      this._arcadeOverlay("Paused", "", "Tap to keep playing");
+      const overlay = this._arcadeEls().overlay;
+      const quit = document.createElement("button");
+      quit.className = "btn ghost ao-quit";
+      quit.textContent = "Quit game";
+      quit.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        this._arcadeQuit();
+      });
+      overlay.appendChild(quit);
+    }
+
+    _arcadeResume() {
+      const A = this.A;
+      A.phase = "play";
+      this._arcadeEls().overlay.classList.remove("show");
+      A.lastTs = performance.now();
+      A.raf = requestAnimationFrame((ts) => this._arcadeTick(ts));
+    }
+
+    _arcadeQuit() {
+      const A = this.A;
+      if (A && (A.correct > 0 || A.roundsCompleted > 0)) {
+        this._arcadeFinish(false);
+      } else {
+        this._arcadeTeardown();
+        this._goHome();
+      }
+    }
+
+    _arcadeTeardown() {
+      if (this.A) cancelAnimationFrame(this.A.raf);
+      document.removeEventListener("visibilitychange", this._onVisibility);
+      this.A = null;
+    }
+
+    async _arcadeFinish(won) {
+      const A = this.A;
+      cancelAnimationFrame(A.raf);
+      A.phase = "finished";
+      const payload = {
+        type: "learning_games/finish_arcade",
+        profile_id: this.S.profile.profile_id,
+        arcade_id: A.game.arcade_id,
+        rounds_completed: Math.min(A.roundsCompleted, 6),
+        rounds_played: Math.max(1, A.roundsPlayed),
+        correct: A.correct,
+        wrong: A.wrong,
+        won,
+      };
+      let res = null;
+      try {
+        res = await this._ws(payload);
+      } catch (err) {
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          res = await this._ws(payload);
+        } catch (err2) {
+          this._arcadeTeardown();
+          this._toastAndHome("Couldn't save your Fly Snap score this time — but great playing!");
+          return;
+        }
+      }
+      const summary = {
+        won,
+        correct: A.correct,
+        roundsCompleted: Math.min(A.roundsCompleted, 6),
+        category: A.category,
+        server: res,
+      };
+      this._arcadeTeardown();
+      this.S.arcadeResults = summary;
+      this.S.screen = "arcade_results";
+      this._render();
+      this._sound(won ? "levelup" : "finish");
+      if (won || (res && res.level_up)) this._burstConfetti(160);
+    }
+
+    _arcadeUpdateHud() {
+      const A = this.A;
+      const els = this._arcadeEls();
+      if (!A || !els.lives) return;
+      els.lives.textContent = "🐸".repeat(Math.max(0, A.lives));
+      els.roundLabel.textContent = `Round ${A.round}/${A.game.rounds}`;
+    }
+
     // ------------------------------------------------------------ rendering
 
     _firstRender() {
@@ -447,6 +844,10 @@
           if (this.S.entry.letters.length === blanks) this._submit(this._assembleWord());
           break;
         }
+        case "arcade-setup": this._sound("tap"); this.S.screen = "arcade_setup"; this._render(); break;
+        case "arcade-start": this._startArcade(data.category); break;
+        case "arcade-pause": this._arcadePause(); break;
+        case "arcade-again": this._sound("tap"); this._startArcade(this.S.arcadeResults.category); break;
         case "retry": this._loadProfiles(); break;
       }
     }
@@ -462,6 +863,9 @@
       else if (screen === "game") html = this._tplGame();
       else if (screen === "results") html = this._tplResults();
       else if (screen === "badges") html = this._tplBadges();
+      else if (screen === "arcade_setup") html = this._tplArcadeSetup();
+      else if (screen === "arcade") html = this._tplArcade();
+      else if (screen === "arcade_results") html = this._tplArcadeResults();
       else if (screen === "error") html = this._tplError();
       root.innerHTML = html;
     }
@@ -499,6 +903,7 @@
       const modes = Object.entries(s.modes);
       const maths = modes.filter(([, m]) => m.subject === "maths");
       const english = modes.filter(([, m]) => m.subject === "english");
+      const challenge = modes.filter(([, m]) => m.subject === "challenge");
       const tile = ([id, m]) => {
         const mastery = Math.round(
           m.skills.reduce((acc, sk) => acc + (s.skills[sk] ? s.skills[sk].mastery : 0), 0) /
@@ -532,12 +937,41 @@
           </div>
           <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
         </div>
+        ${this._tplChallengesSection(s)}
         <div class="subject-label">Maths</div>
         <div class="mode-grid">${maths.map(tile).join("")}</div>
         <div class="subject-label">English</div>
         <div class="mode-grid">${english.map(tile).join("")}</div>
+        <div class="subject-label">Challenges</div>
+        <div class="mode-grid">
+          ${challenge.map(tile).join("")}
+          ${s.arcade ? `
+          <button class="mode-tile" data-action="arcade-setup"
+              style="background:linear-gradient(135deg,#00897B,#4DB6AC)">
+            <span class="memoji">${s.arcade.emoji}</span>
+            <span class="mname">${esc(s.arcade.name)}</span>
+            <span class="mstars">${s.arcade.wins ? `👑×${s.arcade.wins}` : `best: round ${s.arcade.best_round}`}</span>
+          </button>` : ""}
+        </div>
         <button class="btn ghost wide" data-action="badges">🏅 My badges (${s.badge_count})</button>
       `;
+    }
+
+    _tplChallengesSection(s) {
+      if (!s.challenges || !s.challenges.length) return "";
+      const row = (c) => {
+        const pct = Math.min(100, Math.round((c.progress / c.target) * 100));
+        return `<div class="chal ${c.done ? "done" : ""}">
+          <span class="chal-icon">${c.icon}</span>
+          <div class="chal-mid">
+            <div class="chal-desc">${esc(c.desc)}</div>
+            <div class="bar small"><div class="fill" style="width:${pct}%"></div></div>
+          </div>
+          <span class="chal-state">${c.done ? "✅" : `${c.progress}/${c.target}`}</span>
+        </div>`;
+      };
+      return `<div class="subject-label">This week's challenges</div>
+        <div class="chal-list">${s.challenges.map(row).join("")}</div>`;
     }
 
     _tplGame() {
@@ -548,12 +982,21 @@
         const cls = n < q.index ? "done" : n === q.index ? "now" : "";
         return `<span class="dot ${cls}"></span>`;
       }).join("");
+      const boss = this.S.mode === "boss_battle";
+      const hp = boss
+        ? `<div class="boss-strip">
+            <span class="boss-emoji ${this.S.bossHits >= 10 ? "dead" : ""}">👾</span>
+            <div class="boss-hp">${Array.from({ length: 10 }, (_, i) =>
+              `<span class="hp ${i < 10 - this.S.bossHits ? "on" : ""}"></span>`).join("")}</div>
+          </div>`
+        : "";
       return `
         <div class="game-head">
           <button class="btn tiny ghost" data-action="quit">✕</button>
           <div class="dots">${dots}</div>
           <div class="rstreak">${fb && fb.runStreak >= 3 ? `🔥${fb.runStreak}` : ""}</div>
         </div>
+        ${hp}
         <div class="qa ${fb ? (fb.correct ? "good" : "bad") : ""}">
           <div class="prompt">${esc(q.prompt)}</div>
           ${q.prompt_secondary ? `<div class="prompt2">${esc(q.prompt_secondary)}</div>` : ""}
@@ -637,9 +1080,16 @@
       const r = this.S.results;
       const accuracy = Math.round((r.correct / r.total) * 100);
       const stars = accuracy === 100 ? 3 : accuracy >= 70 ? 2 : 1;
+      let bossLine = "";
+      if (r.mode === "boss_battle") {
+        if (r.correct >= 10) bossLine = `<div class="levelup">💥 FLAWLESS VICTORY! 💥</div>`;
+        else if (r.boss_defeated) bossLine = `<div class="levelup">👾💨 The boss flees!</div>`;
+        else bossLine = `<div class="pill up-pill">👾 The boss escaped — train up and rematch!</div>`;
+      }
       return `
         <div class="center results">
           ${r.level_up ? `<div class="levelup">⬆️ LEVEL ${r.new_level}! ⬆️</div>` : ""}
+          ${bossLine}
           <div class="score-ball">${r.correct}/${r.total}</div>
           <div class="result-stars">${"⭐".repeat(stars)}</div>
           <div class="xp-gain">+${r.xp_gained} XP</div>
@@ -674,6 +1124,72 @@
         <div class="badge-grid">
           ${b.earned.map((x) => card(x, false)).join("")}
           ${b.locked.map((x) => card(x, true)).join("")}
+        </div>`;
+    }
+
+    _tplArcadeSetup() {
+      return `
+        <div class="game-head">
+          <button class="btn tiny ghost" data-action="home">←</button>
+          <h3 class="bh">🐸 Fly Snap</h3><span></span>
+        </div>
+        <div class="center" style="min-height:380px">
+          <div class="bigmoji">🐸</div>
+          <p class="errmsg">Tap the fly that matches the frog's word — before the flies reach the lilypad!</p>
+          <div class="acat-grid">
+            ${ARCADE_CATEGORIES.map((c) => `
+              <button class="acat" data-action="arcade-start" data-category="${c.id}">
+                <span class="memoji">${c.emoji}</span>
+                <span class="pname">${c.label}</span>
+                <span class="psub">${c.blurb}</span>
+              </button>`).join("")}
+          </div>
+        </div>`;
+    }
+
+    _tplArcade() {
+      return `
+        <div class="game-head">
+          <button class="btn tiny ghost" data-action="arcade-pause">✕</button>
+          <span id="around" class="around"></span>
+          <span id="alives" class="alives"></span>
+        </div>
+        <div class="abar"><div id="abar-fill" class="abar-fill"></div></div>
+        <div id="pond" class="pond">
+          <div class="lilypad"></div>
+          <div id="frog" class="frog">🐸</div>
+          <div id="frogword" class="frogword"></div>
+          ${[0, 1, 2, 3, 4, 5].map((i) => `
+            <button class="fly" id="fly${i}">
+              <span class="flymoji">🪰</span>
+              <span class="flyword"></span>
+            </button>`).join("")}
+          <div id="aoverlay" class="aoverlay"></div>
+        </div>`;
+    }
+
+    _tplArcadeResults() {
+      const r = this.S.arcadeResults;
+      const server = r.server || {};
+      return `
+        <div class="center results">
+          ${r.won ? `<div class="levelup">👑 POND CHAMPION! 👑</div>` : ""}
+          ${server.level_up ? `<div class="levelup">⬆️ LEVEL ${server.new_level}! ⬆️</div>` : ""}
+          <div class="score-ball" style="background:linear-gradient(135deg,#00897B,#4DB6AC);box-shadow:0 6px 0 #00695C">
+            ${r.correct} 🪰</div>
+          <div class="result-stars">${r.won ? "⭐⭐⭐" : "⭐".repeat(Math.min(3, Math.max(1, Math.ceil(r.roundsCompleted / 2))))}</div>
+          <div class="xp-gain">+${server.xp_gained || 0} XP</div>
+          <div class="pill up-pill">Rounds survived: ${r.roundsCompleted} / 6</div>
+          ${server.daily_goal_met ? `<div class="pill done-pill">🏁 Daily goal done!</div>` : ""}
+          ${(server.new_badges || []).map((b) => `
+            <div class="badge-pop">
+              <span class="bicon">${b.icon}</span>
+              <span><b>${esc(b.name)}</b><br><small>${esc(b.desc)}</small></span>
+            </div>`).join("")}
+          <div class="result-actions">
+            <button class="btn primary" data-action="arcade-again">Play again</button>
+            <button class="btn ghost" data-action="home">Home</button>
+          </div>
         </div>`;
     }
   }
@@ -860,9 +1376,78 @@
     .badge .bdesc { font-size: 12.5px; opacity: 0.7; }
     .badge.locked { filter: grayscale(1); opacity: 0.55; }
 
+    .chal-list { display: flex; flex-direction: column; gap: 8px; }
+    .chal { display: flex; align-items: center; gap: 10px; background: #fff;
+      border-radius: 14px; padding: 8px 12px; box-shadow: 0 3px 0 #f0e3d8; }
+    .chal.done { background: #E8FBF3; }
+    .chal-icon { font-size: 24px; }
+    .chal-mid { flex: 1; }
+    .chal-desc { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .bar.small { height: 8px; }
+    .chal-state { font-size: 14px; font-weight: 800; min-width: 48px; text-align: right; }
+
+    .boss-strip { display: flex; align-items: center; gap: 10px; background: #2D3436;
+      border-radius: 14px; padding: 8px 12px; margin-bottom: 10px; }
+    .boss-emoji { font-size: 28px; }
+    .boss-emoji.dead { filter: grayscale(1); opacity: 0.4; }
+    .boss-hp { display: flex; gap: 4px; flex: 1; }
+    .hp { flex: 1; height: 12px; border-radius: 4px; background: #555; transition: background 0.3s; }
+    .hp.on { background: linear-gradient(90deg, #d63031, #e84393); }
+
+    .acat-grid { display: flex; flex-direction: column; gap: 12px; width: 100%;
+      max-width: 340px; }
+    .acat { display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: #fff; border-radius: 20px; padding: 14px;
+      box-shadow: 0 4px 0 #d8ece8; }
+
+    .around { font-weight: 800; font-size: 17px; }
+    .alives { font-size: 20px; min-width: 80px; text-align: right; }
+    .abar { height: 12px; background: #d8ece8; border-radius: 8px; overflow: hidden;
+      margin-bottom: 10px; }
+    .abar-fill { height: 100%; width: 100%; transform-origin: left;
+      background: linear-gradient(90deg, #00897B, #4DB6AC); }
+    .pond { position: relative; height: 440px; border-radius: 22px; overflow: hidden;
+      background: radial-gradient(circle at 50% 50%, #7EDDD0 0%, #3FB8AF 55%, #2E9C94 100%);
+      touch-action: manipulation; }
+    .pond.locked { filter: saturate(0.55) brightness(0.92); }
+    .lilypad { position: absolute; left: 50%; top: 50%; width: 110px; height: 96px;
+      transform: translate(-50%, -50%); background: #4CAF50; border-radius: 50%;
+      box-shadow: inset 0 -6px 0 #388E3C; }
+    .lilypad::after { content: ""; position: absolute; right: -4px; top: 36%;
+      border: 16px solid transparent; border-left: 26px solid #3FB8AF; }
+    .frog { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -58%);
+      font-size: 44px; z-index: 2; pointer-events: none; }
+    .frog.snap { animation: tongue 0.3s; }
+    @keyframes tongue { 50% { transform: translate(-50%, -58%) scale(1.45); } }
+    .frogword { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -150%);
+      background: #fff; border-radius: 12px; padding: 5px 14px; font-size: 19px;
+      font-weight: 800; box-shadow: 0 3px 0 rgba(0,0,0,0.15); z-index: 3;
+      pointer-events: none; white-space: nowrap; }
+    .fly { position: absolute; left: 0; top: 0; width: 66px; height: 66px;
+      border-radius: 50%; background: rgba(255,255,255,0.92); display: flex;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 0; box-shadow: 0 3px 0 rgba(0,0,0,0.18); z-index: 4; padding: 2px;
+      will-change: transform; }
+    .fly .flymoji { font-size: 18px; line-height: 1; pointer-events: none; }
+    .fly .flyword { font-size: 12.5px; font-weight: 800; line-height: 1.1;
+      text-align: center; pointer-events: none; max-width: 62px; overflow: hidden; }
+    .fly.shake { animation: shake 0.4s; background: #FFD5D5; }
+    .aoverlay { position: absolute; inset: 0; z-index: 6; display: none;
+      flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+      background: rgba(20, 60, 56, 0.78); color: #fff; text-align: center;
+      padding: 20px; }
+    .aoverlay.show { display: flex; }
+    .ao-title { font-size: 28px; font-weight: 800; }
+    .ao-sub { font-size: 17px; opacity: 0.9; max-width: 300px; }
+    .ao-btn { margin-top: 8px; background: #FDCB6E; color: #2D3436; font-weight: 800;
+      border-radius: 16px; padding: 12px 30px; font-size: 19px;
+      box-shadow: 0 4px 0 #d9a33f; }
+    .ao-quit { margin-top: 14px; }
+
     @media (min-width: 700px) {
       .mode-grid { grid-template-columns: repeat(4, 1fr); }
       .wrap { padding: 22px; }
+      .pond { height: 520px; }
     }
   `;
 

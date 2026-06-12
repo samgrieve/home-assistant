@@ -10,7 +10,7 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 
 ## What's inside
 
-**8 game modes** (each round is 10 quick questions):
+**10 question modes** (each round is 10 quick questions):
 
 | Maths | English |
 |---|---|
@@ -18,17 +18,24 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 | 🔢 Number Crunch — add, subtract, place value, rounding | 🧙 Word Wizard — synonyms, antonyms, definitions |
 | ✖️ Big Multiply — long multiplication, division with remainders | 🔍 Word Detective — word classes, punctuation |
 | 🧪 Fraction Lab — fractions, decimals, negative numbers | 👯 Tricky Twins — homophones (their/there/they're…) |
+| 🛒 Shop Keeper — money: totals, change, coins, best value (UK £/p) | 🧱 Word Builder — prefixes, suffixes, root words |
+
+**Plus the Challenges row:**
+- 👾 **Boss Battle** — 10 questions drawn from her four weakest skills, at 1.5× XP, with a boss HP bar that drops with every correct answer. Score 7+ to make the boss flee!
+- 🐸 **Fly Snap** — a real-time arcade game: a frog sits on a lilypad with a word above it while six flies drift inward, each carrying a word. Tap the fly that matches (synonyms, antonyms or homophones). Survive 60 seconds to clear a round, beat 6 speeding-up rounds to win, and don't let a fly reach the lilypad — you have 3 lives.
 
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
-- 16 badges to collect, per-skill mastery stars on every game tile
-- Adaptive difficulty: each of the 15 tracked skills moves up/down 5 bands automatically
+- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze
+- 23 badges to collect, per-skill mastery stars on every game tile
+- Adaptive difficulty: each of the 17 tracked skills moves up/down 5 bands automatically
 
 **For parents**
 - Sensors: level, streak, questions today, accuracy, maths/English mastery (per-skill detail in attributes), last badge, weekly summary
 - `binary_sensor.<name>_daily_goal_met` — the prime automation hook
-- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`
+- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`, `learning_games_challenge_complete`
+- `sensor.<name>_weekly_challenges_done` (0–3) with the full challenge list in attributes
 - All answers are checked server-side — no peeking at the answer in the browser
 
 ## Installation

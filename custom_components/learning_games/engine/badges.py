@@ -118,6 +118,50 @@ BADGES: list[dict] = [
         "hint": "Earn XP to level up",
         "predicate": lambda d, c: d["xp"]["level"] >= 10,
     },
+    {
+        "id": "shop_star", "name": "Shop Star", "icon": "🛒",
+        "desc": "Money skills at level 4 or higher",
+        "hint": "Keep playing Shop Keeper",
+        "predicate": lambda d, c: _band(d, "maths.money") >= 4,
+    },
+    {
+        "id": "word_architect", "name": "Word Architect", "icon": "🧱",
+        "desc": "Prefixes & suffixes at level 4 or higher",
+        "hint": "Keep playing Word Builder",
+        "predicate": lambda d, c: _band(d, "english.affixes") >= 4,
+    },
+    {
+        "id": "boss_slayer", "name": "Boss Slayer", "icon": "👾",
+        "desc": "Defeat the boss",
+        "hint": "Score 7 or more in a Boss Battle",
+        "predicate": lambda d, c: (r := c.get("round")) is not None
+        and r.get("mode") == "boss_battle" and r.get("boss_defeated", False),
+    },
+    {
+        "id": "fly_snapper", "name": "Fly Snapper", "icon": "🪰",
+        "desc": "Finish a game of Fly Snap",
+        "hint": "Help the frog catch some flies",
+        "predicate": lambda d, c: d.get("arcade", {}).get("games", 0) >= 1,
+    },
+    {
+        "id": "frog_champion", "name": "Frog Champion", "icon": "👑",
+        "desc": "Win all 6 rounds of Fly Snap",
+        "hint": "Survive every round of Fly Snap",
+        "predicate": lambda d, c: d.get("arcade", {}).get("wins", 0) >= 1,
+    },
+    {
+        "id": "pond_master", "name": "Pond Master", "icon": "🌊",
+        "desc": "Win Fly Snap in all three categories",
+        "hint": "Win with synonyms, antonyms AND homophones",
+        "predicate": lambda d, c: len(d.get("arcade", {}).get("categories_won", [])) >= 3,
+    },
+    {
+        "id": "challenge_champ", "name": "Challenge Champ", "icon": "🏆",
+        "desc": "Complete all 3 weekly challenges",
+        "hint": "Finish every challenge in one week",
+        "predicate": lambda d, c: (ch := d.get("weekly", {}).get("challenges"))
+        and len(ch) >= 3 and all(x["done"] for x in ch),
+    },
 ]
 
 BADGES_BY_ID = {b["id"]: b for b in BADGES}

@@ -26,8 +26,9 @@ def test_banks_load_and_validate(banks):
     assert len(banks.homophones) >= 15
     assert len(banks.word_classes["items"]) >= 25
     assert len(banks.punctuation) >= 12
+    assert len(banks.affixes) >= 30
     # Every band 1-5 has content in each bank used for banding.
-    for entries in (banks.spelling, banks.vocab):
+    for entries in (banks.spelling, banks.vocab, banks.affixes):
         bands = Counter(e["band"] for e in entries)
         for band in (1, 2, 3, 4, 5):
             assert bands[band] >= 5
@@ -78,6 +79,14 @@ def test_exclude_avoids_recent_words(banks):
     for _ in range(50):
         q = english.generate("english.spelling", 3, rng, banks, exclude)
         assert q.word_key not in exclude
+
+
+def test_affix_real_answer_never_in_distractors(banks):
+    rng = random.Random(17)
+    for _ in range(400):
+        q = english.generate("english.affixes", 3, rng, banks)
+        assert q.options.count(q.answer) == 1
+        assert len(q.options) >= 3
 
 
 def test_homophone_answer_fits_sentence(banks):

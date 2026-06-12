@@ -412,6 +412,195 @@ def _gen_negative_numbers(band: int, rng: random.Random) -> Question:
     return q
 
 
+# --------------------------------------------------------------------------- money (Shop Keeper)
+
+SHOP_ITEMS = [
+    "fizzy snake", "choco frog", "rainbow lolly", "sherbet rocket", "jelly whale",
+    "toffee twist", "bubble pop", "caramel cloud", "bouncy ball", "robot dino",
+    "glitter yo-yo", "puzzle cube", "race car", "squishy alien", "pirate kite",
+    "mini telescope", "sticker pack", "wizard pencil",
+]
+UK_COINS = (200, 100, 50, 20, 10, 5, 2, 1)
+
+
+def _money_display(pence: int) -> str:
+    if pence < 100:
+        return f"{pence}p"
+    pounds, p = divmod(pence, 100)
+    return f"£{pounds}" if p == 0 else f"£{pounds}.{p:02d}"
+
+
+def _money_aliases(pence: int) -> list[str]:
+    """Every form the keypad (digits + '.') or notation could produce."""
+    decimal = f"{pence / 100:.2f}"
+    trimmed = decimal.rstrip("0").rstrip(".")
+    aliases = {str(pence), decimal, f"£{decimal}", trimmed, f"£{trimmed}"}
+    if pence < 100:
+        aliases.add(f"{pence}p")
+    return sorted(aliases)
+
+
+def _money_question(skill: str, prompt: str, pence: int, hint: str,
+                    explain: str | None = None) -> Question:
+    q = _make(skill, QTYPE_NUMERIC, prompt, _money_display(pence))
+    q.answer_aliases = _money_aliases(pence)
+    q.prompt_secondary = hint
+    q.explain = explain
+    return q
+
+
+def _coin_label(coin: int) -> str:
+    return {200: "£2", 100: "£1"}.get(coin, f"{coin}p")
+
+
+def _greedy_coins(amount: int) -> list[int]:
+    coins = []
+    for coin in UK_COINS:
+        while amount >= coin:
+            coins.append(coin)
+            amount -= coin
+    return coins
+
+
+def _coin_sum_str(coins: list[int]) -> str:
+    return " + ".join(_coin_label(c) for c in coins)
+
+
+def _pick_items(rng: random.Random, count: int) -> list[str]:
+    return rng.sample(SHOP_ITEMS, count)
+
+
+def _gen_money(band: int, rng: random.Random) -> Question:
+    skill = "maths.money"
+    hint_pence = "Answer in pence, like 64"
+    hint_pounds = "Type pounds like 3.45"
+
+    if band == 1:
+        a, b = rng.randint(12, 45), rng.randint(12, 45)
+        item1, item2 = _pick_items(rng, 2)
+        return _money_question(
+            skill,
+            f"A {item1} costs {a}p and a {item2} costs {b}p. How much altogether?",
+            a + b, hint_pence,
+        )
+
+    if band == 2:
+        if rng.random() < 0.5:
+            a, b = rng.randint(55, 95), rng.randint(55, 95)
+            item1, item2 = _pick_items(rng, 2)
+            return _money_question(
+                skill,
+                f"A {item1} costs {a}p and a {item2} costs {b}p. How much altogether?",
+                a + b, hint_pounds,
+                explain=f"{a}p + {b}p = {a + b}p = {_money_display(a + b)}",
+            )
+        pence = rng.randint(101, 999)
+        if rng.random() < 0.5:
+            return _money_question(
+                skill, f"Write {pence}p in pounds", pence, hint_pounds,
+                explain=f"100p makes £1, so {pence}p = {_money_display(pence)}",
+            )
+        q = _make(skill, QTYPE_NUMERIC, f"How many pence is {_money_display(pence)}?", f"{pence}p")
+        q.answer_aliases = [str(pence)]
+        q.prompt_secondary = hint_pence
+        return q
+
+    if band == 3:
+        paying = rng.choice((100, 200))
+        price = rng.randint(15, paying - 5)
+        if price % 5 == 0 and rng.random() < 0.5:
+            price += rng.randint(1, 4)
+        item = _pick_items(rng, 1)[0]
+        return _money_question(
+            skill,
+            f"You buy a {item} for {_money_display(price)} and pay with "
+            f"{_money_display(paying)}. How much change?",
+            paying - price, hint_pounds if paying - price >= 100 else hint_pence,
+            explain=f"{_money_display(paying)} − {_money_display(price)} = {_money_display(paying - price)}",
+        )
+
+    if band == 4:
+        if rng.random() < 0.5:
+            prices = [rng.randint(85, 299) for _ in range(3)]
+            items = _pick_items(rng, 3)
+            listing = ", ".join(
+                f"a {item} for {_money_display(p)}" for item, p in zip(items, prices)
+            )
+            return _money_question(
+                skill, f"You buy {listing}. What is the total?",
+                sum(prices), hint_pounds,
+            )
+        prices = [rng.randint(75, 220) for _ in range(2)]
+        items = _pick_items(rng, 2)
+        total = sum(prices)
+        return _money_question(
+            skill,
+            f"A {items[0]} costs {_money_display(prices[0])} and a {items[1]} costs "
+            f"{_money_display(prices[1])}. You pay with £5. How much change?",
+            500 - total, hint_pounds,
+            explain=f"Total {_money_display(total)}; £5 − {_money_display(total)} = {_money_display(500 - total)}",
+        )
+
+    # band 5: change from £10/£20, coin-making MC, best-value MC
+    form = rng.choice(("big_change", "coins", "best_value"))
+    if form == "big_change":
+        prices = [rng.randint(149, 449) for _ in range(rng.choice((2, 3)))]
+        items = _pick_items(rng, len(prices))
+        total = sum(prices)
+        paying = 1000 if total < 950 and rng.random() < 0.5 else 2000
+        listing = ", ".join(
+            f"a {item} ({_money_display(p)})" for item, p in zip(items, prices)
+        )
+        return _money_question(
+            skill,
+            f"You buy {listing} and pay with {_money_display(paying)}. How much change?",
+            paying - total, hint_pounds,
+            explain=f"Total {_money_display(total)}; change {_money_display(paying - total)}",
+        )
+    if form == "coins":
+        target = rng.randint(26, 99)
+        if target % 5 == 0:
+            target += rng.choice((1, 2, 3, 4))
+        correct_coins = _greedy_coins(target)
+        correct = _coin_sum_str(correct_coins)
+        wrongs: set[str] = set()
+        attempts = 0
+        while len(wrongs) < 3 and attempts < 60:
+            attempts += 1
+            coins = list(correct_coins)
+            idx = rng.randrange(len(coins))
+            swap = rng.choice([c for c in UK_COINS if c != coins[idx] and c <= 50])
+            coins[idx] = swap
+            coins.sort(reverse=True)
+            text = _coin_sum_str(coins)
+            if sum(coins) != target and text != correct:
+                wrongs.add(text)
+        q = _make(skill, QTYPE_MULTIPLE_CHOICE,
+                  f"Which coins make exactly {target}p?", correct)
+        q.options = sorted(wrongs)[:3] + [correct]
+        rng.shuffle(q.options)
+        q.explain = f"{correct} = {target}p"
+        return q
+    # best value
+    item = _pick_items(rng, 1)[0]
+    n1 = rng.randint(2, 4)
+    unit1 = rng.randint(20, 70)
+    n2 = n1 + rng.randint(1, 3)
+    unit2 = unit1 + rng.choice((-1, 1)) * rng.randint(3, 12)
+    deal1 = f"{n1} {item}s for {_money_display(n1 * unit1)}"
+    deal2 = f"{n2} {item}s for {_money_display(n2 * unit2)}"
+    correct = deal1 if unit1 < unit2 else deal2
+    q = _make(skill, QTYPE_MULTIPLE_CHOICE, "Which is the better deal?", correct)
+    q.prompt_secondary = f"{deal1}   or   {deal2}"
+    q.options = [deal1, deal2]
+    rng.shuffle(q.options)
+    q.explain = (
+        f"That works out at {min(unit1, unit2)}p each — "
+        f"the other is {max(unit1, unit2)}p each."
+    )
+    return q
+
+
 # --------------------------------------------------------------------------- registry
 
 GENERATORS = {
@@ -425,6 +614,7 @@ GENERATORS = {
     "maths.rounding": _gen_rounding,
     "maths.place_value": _gen_place_value,
     "maths.negative_numbers": _gen_negative_numbers,
+    "maths.money": _gen_money,
 }
 
 

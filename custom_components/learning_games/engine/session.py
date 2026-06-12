@@ -1,6 +1,7 @@
 """A single game round: question sequencing, scoring, XP and adaptive updates."""
 from __future__ import annotations
 
+import math
 import random
 
 from . import adaptive, generate_question, pick_skill
@@ -33,6 +34,7 @@ class GameSession:
         skills: dict[str, SkillState],
         banks: WordBanks | None,
         rng: random.Random | None = None,
+        xp_multiplier: float = 1.0,
     ) -> None:
         self.session_id = session_id
         self.mode_id = mode_id
@@ -40,6 +42,7 @@ class GameSession:
         self.skills = skills
         self.banks = banks
         self.rng = rng or random.Random()
+        self.xp_multiplier = xp_multiplier
 
         self.index = 0  # 1-based index of the current question
         self.current: Question | None = None
@@ -100,6 +103,7 @@ class GameSession:
             self.run_streak = 0
             xp_delta = XP_WRONG_EFFORT
 
+        xp_delta = math.ceil(xp_delta * self.xp_multiplier)
         self.xp += xp_delta
 
         state = self.skills[question.skill]
@@ -115,7 +119,7 @@ class GameSession:
         self.current = None
         if self.index >= self.length:
             self.done = True
-            self.xp += XP_ROUND_COMPLETE
+            self.xp += math.ceil(XP_ROUND_COMPLETE * self.xp_multiplier)
 
         return AnswerOutcome(
             correct=correct,

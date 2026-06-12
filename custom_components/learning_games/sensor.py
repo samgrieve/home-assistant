@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import ProfileCoordinator, level_progress
+from .engine import challenges
 from .engine.badges import badge_public
 from .entity import LearningGamesEntity
 
@@ -97,6 +98,19 @@ SENSORS: tuple[LearningGamesSensorDescription, ...] = (
     LearningGamesSensorDescription(
         "last_badge", "Last badge", "mdi:medal", None,
         _last_badge_value, _last_badge_attrs,
+    ),
+    LearningGamesSensorDescription(
+        "weekly_challenges", "Weekly challenges done", "mdi:trophy-outline", None,
+        lambda c: sum(
+            1 for ch in c.data["weekly"].get("challenges", []) if ch["done"]
+        ),
+        lambda c: {
+            "challenges": [
+                challenges.describe(ch)
+                for ch in c.data["weekly"].get("challenges", [])
+            ],
+            "week_start": c.data["weekly"]["week_start"],
+        },
     ),
     LearningGamesSensorDescription(
         "weekly_questions", "Weekly questions", "mdi:calendar-week", "questions",

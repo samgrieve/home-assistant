@@ -70,6 +70,45 @@ def test_all_rounder_and_high_flyer_and_comeback():
     assert {"all_rounder", "high_flyer", "comeback_kid"} <= set(new)
 
 
+def test_boss_slayer():
+    ctx = {"trigger": "round", "round": {
+        "mode": "boss_battle", "total": 10, "correct": 7,
+        "speed_bonuses": 0, "boss_defeated": True}}
+    assert "boss_slayer" in check_badges(base_data(), ctx)
+    ctx["round"]["boss_defeated"] = False
+    ctx["round"]["correct"] = 6
+    assert "boss_slayer" not in check_badges(base_data(), ctx)
+
+
+def test_arcade_badges():
+    data = base_data(arcade={"games": 3, "wins": 1, "best_round": 6,
+                             "categories_won": ["synonyms", "antonyms", "homophones"]})
+    new = check_badges(data, {"trigger": "arcade"})
+    assert {"fly_snapper", "frog_champion", "pond_master"} <= set(new)
+    data = base_data(arcade={"games": 1, "wins": 0, "best_round": 2, "categories_won": []})
+    new = check_badges(data, {"trigger": "arcade"})
+    assert "fly_snapper" in new
+    assert "frog_champion" not in new
+
+
+def test_challenge_champ():
+    data = base_data(weekly={"modes_played": [], "challenges": [
+        {"id": "a", "done": True}, {"id": "b", "done": True}, {"id": "c", "done": True}]})
+    assert "challenge_champ" in check_badges(data, {"trigger": "answer"})
+    data["weekly"]["challenges"][2]["done"] = False
+    data["badges"] = {}
+    assert "challenge_champ" not in check_badges(data, {"trigger": "answer"})
+
+
+def test_shop_and_affix_badges():
+    data = base_data(skills={
+        "maths.money": {"band": 4, "attempts": 1, "correct": 1},
+        "english.affixes": {"band": 5, "attempts": 1, "correct": 1},
+    })
+    new = check_badges(data, {"trigger": "answer"})
+    assert {"shop_star", "word_architect"} <= set(new)
+
+
 def test_earned_badges_not_re_earned():
     data = base_data(badges={"first_steps": "2026-01-01T00:00:00"})
     new = check_badges(data, {"trigger": "round", "round": {
@@ -78,7 +117,7 @@ def test_earned_badges_not_re_earned():
 
 
 def test_badge_metadata_complete():
-    assert len(BADGES) == 16
+    assert len(BADGES) == 23
     for badge in BADGES:
         for key in ("id", "name", "icon", "desc", "hint", "predicate"):
             assert badge[key], f"{badge['id']} missing {key}"

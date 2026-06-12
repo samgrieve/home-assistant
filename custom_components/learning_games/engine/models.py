@@ -31,9 +31,13 @@ class Question:
     explain: str | None = None
     target_ms: int = 10000  # speed-bonus threshold
     word_key: str | None = None  # dedupe key for word-based questions
+    answer_aliases: list[str] | None = None  # alternate accepted spellings, server-side only
 
     def check(self, submitted: str) -> bool:
-        return normalize_answer(submitted) == normalize_answer(self.answer)
+        norm = normalize_answer(submitted)
+        if norm == normalize_answer(self.answer):
+            return True
+        return any(norm == normalize_answer(alias) for alias in (self.answer_aliases or []))
 
     def to_wire(self, index: int, total: int) -> dict:
         """Shape sent to the card — must not include the answer."""

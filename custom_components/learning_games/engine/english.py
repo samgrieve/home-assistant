@@ -184,6 +184,65 @@ def _gen_punctuation(band: int, rng: random.Random, banks: WordBanks, exclude: s
     return q
 
 
+# --------------------------------------------------------------------------- affixes
+
+def _affix_forms(entry: dict) -> list[str]:
+    forms = []
+    if entry.get("prefix") and entry.get("meaning"):
+        forms.append("prefix_pick")
+    if entry.get("misspellings"):
+        forms.append("spelling_pick")
+    if entry.get("suffix") and entry.get("makes"):
+        forms.append("suffix_function")
+    if entry.get("prefix") or entry.get("suffix"):
+        forms.append("root_word")
+    return forms
+
+
+def _gen_affixes(band: int, rng: random.Random, banks: WordBanks, exclude: set[str]) -> Question:
+    entry = rng.choice(_by_band(banks.affixes, band, exclude, lambda e: e["word"]))
+    form = rng.choice(_affix_forms(entry))
+    word = entry["word"]
+
+    if form == "prefix_pick":
+        prefix = entry["prefix"]
+        q = _make("english.affixes",
+                  f"Which prefix makes a word meaning “{entry['meaning']}”?",
+                  prefix, word_key=word)
+        q.prompt_secondary = f"___ + {entry['root']}"
+        q.options = list(entry["wrong_affixes"][:3]) + [prefix]
+        q.explain = f"{prefix} + {entry['root']} = {word}"
+    elif form == "spelling_pick":
+        q = _make("english.affixes", "Which spelling is correct?", word, word_key=word)
+        q.options = list(entry["misspellings"][:3]) + [word]
+    elif form == "suffix_function":
+        suffix = f"-{entry['suffix']}"
+        q = _make("english.affixes",
+                  f"Which suffix turns ‘{entry['root']}’ into "
+                  f"{'an' if entry['makes'][0] in 'aeiou' else 'a'} {entry['makes']}?",
+                  suffix, word_key=word)
+        q.options = [f"-{w}" for w in entry["wrong_affixes"][:3]] + [suffix]
+        q.explain = f"{entry['root']} → {word}"
+    else:  # root_word
+        root = entry["root"]
+        distractors = {word}
+        if entry.get("prefix") and entry.get("suffix"):
+            distractors.add(word.removeprefix(entry["prefix"]))
+            # strip-suffix-only variant, tolerating joined spelling changes
+            if word.endswith(entry["suffix"]):
+                distractors.add(word.removesuffix(entry["suffix"]))
+        elif entry.get("prefix"):
+            distractors.add(root + "ing")
+        else:
+            distractors.add("un" + root)
+        distractors.discard(root)
+        q = _make("english.affixes",
+                  f"What is the root word of ‘{word}’?", root, word_key=word)
+        q.options = sorted(distractors)[:3] + [root]
+    rng.shuffle(q.options)
+    return q
+
+
 # --------------------------------------------------------------------------- registry
 
 GENERATORS = {
@@ -192,6 +251,7 @@ GENERATORS = {
     "english.word_classes": _gen_word_classes,
     "english.homophones": _gen_homophones,
     "english.punctuation": _gen_punctuation,
+    "english.affixes": _gen_affixes,
 }
 
 

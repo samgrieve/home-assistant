@@ -59,8 +59,10 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     assert msg["success"]
     stats = msg["result"]
     assert stats["daily"]["goal"] == 5
-    assert len(stats["modes"]) == 8
-    assert len(stats["skills"]) == 15
+    assert len(stats["modes"]) == 11
+    assert len(stats["skills"]) == 17
+    assert len(stats["challenges"]) == 3
+    assert stats["arcade"]["games"] == 0
 
     await client.send_json(
         {"id": 2, "type": f"{DOMAIN}/get_badges", "profile_id": entry.entry_id}
@@ -68,7 +70,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert msg["result"]["earned"] == []
-    assert len(msg["result"]["locked"]) == 16
+    assert len(msg["result"]["locked"]) == 23
 
 
 async def test_unknown_profile_errors(hass: HomeAssistant, hass_ws_client):
@@ -210,6 +212,124 @@ async def test_abandon_session(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert session_id not in coordinator.sessions
+
+
+async def test_arcade_full_flow(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass, daily_goal=5)
+    client = await hass_ws_client(hass)
+
+    events = []
+    hass.bus.async_listen(EVENT_SESSION_COMPLETE, lambda e: events.append(e.data))
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": f"{DOMAIN}/start_arcade",
+            "profile_id": entry.entry_id,
+            "category": "synonyms",
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    start = msg["result"]
+    assert start["rounds"] == 6
+    assert len(start["rounds_data"]) == 6
+    assert start["skill"] == "english.vocabulary"
+    assert len(start["travel_s"]) == 6
+
+    await client.send_json(
+        {
+            "id": 2,
+            "type": f"{DOMAIN}/finish_arcade",
+            "profile_id": entry.entry_id,
+            "arcade_id": start["arcade_id"],
+            "rounds_completed": 6,
+            "rounds_played": 7,
+            "correct": 9999,  # absurd — must be clamped
+            "wrong": 500,
+            "won": True,
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    result = msg["result"]
+    assert result["won"] is True
+    assert result["correct_counted"] <= 12 * 7  # clamp applied
+    assert result["xp_gained"] > 0
+    assert any(b["id"] == "fly_snapper" for b in result["new_badges"])
+    assert any(b["id"] == "frog_champion" for b in result["new_badges"])
+
+    await hass.async_block_till_done()
+    assert len(events) == 1
+    assert events[0]["mode"] == "fly_snap"
+
+    coordinator = hass.data[DOMAIN]["coordinators"][entry.entry_id]
+    assert coordinator.data["arcade"]["games"] == 1
+    assert coordinator.data["arcade"]["wins"] == 1
+    assert coordinator.data["daily"]["questions"] > 0
+    assert coordinator.data["daily"]["goal_met"] is True
+
+    # A second finish for the same arcade id must fail.
+    await client.send_json(
+        {
+            "id": 3,
+            "type": f"{DOMAIN}/finish_arcade",
+            "profile_id": entry.entry_id,
+            "arcade_id": start["arcade_id"],
+            "rounds_completed": 6,
+            "rounds_played": 6,
+            "correct": 10,
+            "wrong": 0,
+            "won": True,
+        }
+    )
+    msg = await client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "arcade_not_found"
+
+
+async def test_boss_battle_multiplier_and_challenges(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass, daily_goal=50)
+    client = await hass_ws_client(hass)
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": f"{DOMAIN}/start_session",
+            "profile_id": entry.entry_id,
+            "mode": "boss_battle",
+            "length": 10,
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    session_id = msg["result"]["session_id"]
+    question = msg["result"]["question"]
+
+    await client.send_json(
+        {
+            "id": 2,
+            "type": f"{DOMAIN}/submit_answer",
+            "profile_id": entry.entry_id,
+            "session_id": session_id,
+            "question_id": question["question_id"],
+            "answer": "deliberately wrong answer",
+            "elapsed_ms": 1500,
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    # Effort XP is 1; the boss multiplier makes it ceil(1 * 1.5) = 2.
+    assert msg["result"]["xp_delta"] == 2
+
+    # Challenge progress is visible in stats.
+    await client.send_json(
+        {"id": 3, "type": f"{DOMAIN}/get_stats", "profile_id": entry.entry_id}
+    )
+    msg = await client.receive_json()
+    challenges = msg["result"]["challenges"]
+    assert len(challenges) == 3
+    assert all({"name", "icon", "desc", "target", "progress", "done"} <= set(c) for c in challenges)
 
 
 async def test_invalid_mode_errors(hass: HomeAssistant, hass_ws_client):

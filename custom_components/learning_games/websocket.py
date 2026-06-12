@@ -13,10 +13,12 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN
 from .coordinator import ProfileCoordinator
+from .engine.arcade import CATEGORIES
 from .engine.session import DEFAULT_LENGTH, SessionError
 
 ERR_PROFILE_NOT_FOUND = "profile_not_found"
 ERR_SESSION_NOT_FOUND = "session_not_found"
+ERR_ARCADE_NOT_FOUND = "arcade_not_found"
 ERR_INVALID_MODE = "invalid_mode"
 
 
@@ -28,6 +30,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_start_session)
     websocket_api.async_register_command(hass, ws_submit_answer)
     websocket_api.async_register_command(hass, ws_abandon_session)
+    websocket_api.async_register_command(hass, ws_start_arcade)
+    websocket_api.async_register_command(hass, ws_finish_arcade)
 
 
 def _coordinators(hass: HomeAssistant) -> dict[str, ProfileCoordinator]:
@@ -116,6 +120,46 @@ def ws_submit_answer(hass, connection, msg) -> None:
         connection.send_error(
             msg["id"], ERR_SESSION_NOT_FOUND, "Session expired — start a new round"
         )
+        return
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/start_arcade",
+        vol.Required("profile_id"): str,
+        vol.Required("category"): vol.In(CATEGORIES),
+    }
+)
+@callback
+def ws_start_arcade(hass, connection, msg) -> None:
+    if coordinator := _get_coordinator(hass, connection, msg):
+        connection.send_result(msg["id"], coordinator.start_arcade(msg["category"]))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/finish_arcade",
+        vol.Required("profile_id"): str,
+        vol.Required("arcade_id"): str,
+        vol.Required("rounds_completed"): vol.All(int, vol.Range(min=0, max=6)),
+        vol.Required("rounds_played"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Required("correct"): vol.All(int, vol.Range(min=0)),
+        vol.Required("wrong"): vol.All(int, vol.Range(min=0)),
+        vol.Required("won"): bool,
+    }
+)
+@callback
+def ws_finish_arcade(hass, connection, msg) -> None:
+    if not (coordinator := _get_coordinator(hass, connection, msg)):
+        return
+    try:
+        result = coordinator.finish_arcade(
+            msg["arcade_id"], msg["rounds_completed"], msg["rounds_played"],
+            msg["correct"], msg["wrong"], msg["won"],
+        )
+    except SessionError:
+        connection.send_error(msg["id"], ERR_ARCADE_NOT_FOUND, "Arcade game not found")
         return
     connection.send_result(msg["id"], result)
 

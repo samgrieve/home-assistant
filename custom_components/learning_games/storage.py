@@ -28,6 +28,7 @@ def default_data(name: str, avatar: str, created: str) -> dict:
         "skills": {skill: _default_skill() for skill in ALL_SKILLS},
         "badges": {},
         "history": [],
+        "arcade": {"games": 0, "wins": 0, "best_round": 0, "categories_won": []},
     }
 
 
@@ -52,6 +53,7 @@ def _default_weekly(week_start: str) -> dict:
         "rounds": 0,
         "per_day": {},
         "modes_played": [],
+        "challenges": [],
     }
 
 

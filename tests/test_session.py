@@ -99,6 +99,38 @@ def test_session_length_clamped():
     assert make_session(length=999).length <= 30
 
 
+def test_xp_multiplier():
+    skills = {s: SkillState() for s in ALL_SKILLS}
+    session = GameSession("s1", "boss_battle", 10, skills, BANKS,
+                          random.Random(3), xp_multiplier=1.5)
+    q = session.next_question()
+    outcome = session.submit(q.question_id, "definitely wrong", 1000)
+    assert outcome.xp_delta == 2  # ceil(1 * 1.5)
+    q = session.next_question()
+    outcome = session.submit(q.question_id, q.answer, 59000)  # correct, slow
+    assert outcome.xp_delta == 15  # ceil(10 * 1.5)
+    # Finish the round; completion bonus is ceil(20 * 1.5) = 30.
+    xp_before = session.xp
+    extra = 0
+    for _ in range(8):
+        q = session.next_question()
+        out = session.submit(q.question_id, "wrong again", 1000)
+        extra += out.xp_delta
+    assert session.results().xp_gained == xp_before + extra + 30
+
+
+def test_boss_battle_targets_weakest_skills():
+    skills = {s: SkillState(mastery=80.0) for s in ALL_SKILLS}
+    weak = ["maths.money", "english.affixes", "maths.fractions", "english.spelling"]
+    for i, s in enumerate(weak):
+        skills[s] = SkillState(mastery=float(i))
+    rng = random.Random(11)
+    from custom_components.learning_games.engine import pick_skill
+
+    picked = {pick_skill("boss_battle", skills, rng) for _ in range(200)}
+    assert picked == set(weak)
+
+
 def test_no_repeated_word_questions_in_round():
     session = make_session(mode="spelling_star", length=10, seed=2)
     seen = []

@@ -1,7 +1,7 @@
 """Constants for the Learning Games integration."""
 
 DOMAIN = "learning_games"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 STORAGE_VERSION = 1
 STORAGE_MINOR_VERSION = 1
@@ -23,6 +23,7 @@ EVENT_LEVEL_UP = "learning_games_level_up"
 EVENT_BADGE_EARNED = "learning_games_badge_earned"
 EVENT_STREAK_MILESTONE = "learning_games_streak_milestone"
 EVENT_SESSION_COMPLETE = "learning_games_session_complete"
+EVENT_CHALLENGE_COMPLETE = "learning_games_challenge_complete"
 
 STREAK_MILESTONES = (3, 7, 14, 30, 50, 100)
 

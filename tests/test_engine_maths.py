@@ -30,7 +30,7 @@ def test_fuzz_generator(skill, band):
             assert len(q.options) == len(set(q.options)), f"duplicate options for {q.prompt}: {q.options}"
             assert len(q.options) >= 2
         elif q.qtype == QTYPE_NUMERIC:
-            float(q.answer.replace(",", ""))
+            float(q.answer.replace(",", "").replace("£", "").rstrip("p"))
         elif q.qtype == QTYPE_NUMERIC_REMAINDER:
             assert re.fullmatch(r"\d+ r \d+", q.answer), q.answer
         else:
@@ -90,6 +90,58 @@ def test_subtraction_never_negative():
             q = maths.generate("maths.subtraction", band, rng)
             if q.qtype == QTYPE_NUMERIC and "− ?" not in q.prompt:
                 assert int(q.answer) >= 0
+
+
+def test_money_aliases_accepted():
+    assert maths._money_display(64) == "64p"
+    assert maths._money_display(350) == "£3.50"
+    assert maths._money_display(400) == "£4"
+    q = maths._money_question("maths.money", "test", 350, "hint")
+    for accepted in ("£3.50", "3.50", "3.5", "£3.5", "350", " 3.50 "):
+        assert q.check(accepted), accepted
+    assert not q.check("3.55")
+    q = maths._money_question("maths.money", "test", 64, "hint")
+    for accepted in ("64p", "64", "0.64", "£0.64"):
+        assert q.check(accepted), accepted
+
+
+def test_money_change_never_negative():
+    rng = random.Random(21)
+    for band in (3, 4, 5):
+        for _ in range(300):
+            q = maths.generate("maths.money", band, rng)
+            if q.qtype == QTYPE_NUMERIC and "change" in q.prompt.lower():
+                pence = float(q.answer.replace("£", "").rstrip("p"))
+                assert pence > 0, q.prompt
+
+
+def test_money_coin_options_single_correct():
+    rng = random.Random(23)
+    seen = 0
+    for _ in range(400):
+        q = maths.generate("maths.money", 5, rng)
+        if not q.prompt.startswith("Which coins"):
+            continue
+        seen += 1
+        target = int(q.prompt.split("exactly ")[1].rstrip("p?"))
+
+        def coin_total(text):
+            total = 0
+            for part in text.split(" + "):
+                total += int(float(part.replace("£", "")) * 100) if part.startswith("£") else int(part.rstrip("p"))
+            return total
+
+        matching = [o for o in q.options if coin_total(o) == target]
+        assert matching == [q.answer], (q.options, target)
+    assert seen > 50
+
+
+def test_money_aliases_not_on_wire():
+    rng = random.Random(25)
+    q = maths.generate("maths.money", 2, rng)
+    wire = q.to_wire(1, 10)
+    assert "answer" not in wire
+    assert "answer_aliases" not in wire
 
 
 def test_band_clamped():

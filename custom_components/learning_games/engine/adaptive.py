@@ -36,11 +36,13 @@ TARGET_MS = {
     "maths.rounding": 10000,
     "maths.place_value": 10000,
     "maths.negative_numbers": 12000,
+    "maths.money": 20000,
     "english.spelling": 15000,
     "english.vocabulary": 12000,
     "english.word_classes": 10000,
     "english.homophones": 10000,
     "english.punctuation": 12000,
+    "english.affixes": 10000,
 }
 DEFAULT_TARGET_MS = 12000
 
