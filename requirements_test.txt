@@ -1,0 +1,4 @@
+# For local testing against an older core (Python 3.11), pin instead:
+#   homeassistant==2024.3.3 pytest-homeassistant-custom-component==0.13.111
+pytest
+pytest-homeassistant-custom-component

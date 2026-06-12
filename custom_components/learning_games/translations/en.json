@@ -1,0 +1,46 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Create a player profile",
+        "description": "Set up a Learning Games profile for your child.",
+        "data": {
+          "name": "Child's name",
+          "avatar": "Avatar",
+          "daily_goal": "Daily goal (questions per day)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Please enter a name."
+    },
+    "abort": {
+      "already_configured": "A profile with this name already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Profile settings",
+        "data": {
+          "avatar": "Avatar",
+          "daily_goal": "Daily goal (questions per day)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "avatar": {
+      "options": {
+        "fox": "🦊 Fox",
+        "owl": "🦉 Owl",
+        "cat": "🐱 Cat",
+        "dragon": "🐲 Dragon",
+        "unicorn": "🦄 Unicorn",
+        "robot": "🤖 Robot",
+        "panda": "🐼 Panda",
+        "rocket": "🚀 Rocket"
+      }
+    }
+  }
+}

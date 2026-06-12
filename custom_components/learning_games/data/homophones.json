@@ -1,0 +1,86 @@
+{
+  "sets": [
+    {"band": 1, "words": ["their", "there", "they're"], "sentences": [
+      {"text": "The children put on ___ coats.", "answer": "their"},
+      {"text": "Look over ___, behind the tree!", "answer": "there"},
+      {"text": "___ going to the park after lunch.", "answer": "they're"}
+    ]},
+    {"band": 1, "words": ["to", "too", "two"], "sentences": [
+      {"text": "Can I come ___? I love the beach!", "answer": "too"},
+      {"text": "She has ___ pet rabbits.", "answer": "two"},
+      {"text": "We are going ___ the cinema.", "answer": "to"}
+    ]},
+    {"band": 1, "words": ["hear", "here"], "sentences": [
+      {"text": "Did you ___ that strange noise?", "answer": "hear"},
+      {"text": "Come over ___ and sit with me.", "answer": "here"}
+    ]},
+    {"band": 1, "words": ["sea", "see"], "sentences": [
+      {"text": "The ship sailed across the ___.", "answer": "sea"},
+      {"text": "I can ___ the mountains from my window.", "answer": "see"}
+    ]},
+    {"band": 2, "words": ["your", "you're"], "sentences": [
+      {"text": "Is this ___ pencil case?", "answer": "your"},
+      {"text": "___ the best friend I could ask for.", "answer": "you're"}
+    ]},
+    {"band": 2, "words": ["its", "it's"], "sentences": [
+      {"text": "The dog wagged ___ tail happily.", "answer": "its"},
+      {"text": "___ raining again today.", "answer": "it's"}
+    ]},
+    {"band": 2, "words": ["where", "wear"], "sentences": [
+      {"text": "___ did you leave your school bag?", "answer": "where"},
+      {"text": "You should ___ a helmet on your bike.", "answer": "wear"}
+    ]},
+    {"band": 2, "words": ["brake", "break"], "sentences": [
+      {"text": "Squeeze the ___ gently to slow down.", "answer": "brake"},
+      {"text": "Be careful not to ___ the vase.", "answer": "break"}
+    ]},
+    {"band": 2, "words": ["peace", "piece"], "sentences": [
+      {"text": "Would you like a ___ of cake?", "answer": "piece"},
+      {"text": "After the noisy party, she enjoyed the ___ and quiet.", "answer": "peace"}
+    ]},
+    {"band": 3, "words": ["threw", "through"], "sentences": [
+      {"text": "He ___ the ball over the fence.", "answer": "threw"},
+      {"text": "The train went ___ a long, dark tunnel.", "answer": "through"}
+    ]},
+    {"band": 3, "words": ["weight", "wait"], "sentences": [
+      {"text": "Please ___ for me by the gate.", "answer": "wait"},
+      {"text": "The ___ of the suitcase made her arm ache.", "answer": "weight"}
+    ]},
+    {"band": 3, "words": ["past", "passed"], "sentences": [
+      {"text": "She ___ the library on her way to school.", "answer": "passed"},
+      {"text": "We walked ___ the old castle.", "answer": "past"}
+    ]},
+    {"band": 3, "words": ["aloud", "allowed"], "sentences": [
+      {"text": "The teacher read the story ___ to the class.", "answer": "aloud"},
+      {"text": "We are not ___ to run in the corridor.", "answer": "allowed"}
+    ]},
+    {"band": 4, "words": ["whose", "who's"], "sentences": [
+      {"text": "___ school jumper is this on the floor?", "answer": "whose"},
+      {"text": "___ coming to your birthday party?", "answer": "who's"}
+    ]},
+    {"band": 4, "words": ["affect", "effect"], "sentences": [
+      {"text": "The cold weather can ___ how plants grow.", "answer": "affect"},
+      {"text": "The new rule had a positive ___ on the class.", "answer": "effect"}
+    ]},
+    {"band": 4, "words": ["desert", "dessert"], "sentences": [
+      {"text": "Camels can survive for days in the ___.", "answer": "desert"},
+      {"text": "My favourite ___ is sticky toffee pudding.", "answer": "dessert"}
+    ]},
+    {"band": 5, "words": ["practice", "practise"], "sentences": [
+      {"text": "Football ___ is on Tuesday evening.", "answer": "practice"},
+      {"text": "You should ___ the piano every day.", "answer": "practise"}
+    ]},
+    {"band": 5, "words": ["stationary", "stationery"], "sentences": [
+      {"text": "The traffic was completely ___ on the motorway.", "answer": "stationary"},
+      {"text": "She bought new pens from the ___ shop.", "answer": "stationery"}
+    ]},
+    {"band": 5, "words": ["principal", "principle"], "sentences": [
+      {"text": "Honesty is an important ___ to live by.", "answer": "principle"},
+      {"text": "The ___ dancer led the whole performance.", "answer": "principal"}
+    ]},
+    {"band": 5, "words": ["advice", "advise"], "sentences": [
+      {"text": "My gran always gives me good ___.", "answer": "advice"},
+      {"text": "I would ___ you to take an umbrella.", "answer": "advise"}
+    ]}
+  ]
+}

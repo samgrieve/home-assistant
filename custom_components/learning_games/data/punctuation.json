@@ -1,0 +1,20 @@
+{
+  "items": [
+    {"band": 1, "correct": "I like apples, pears and grapes.", "wrong": ["I like apples pears and grapes.", "I like, apples pears, and grapes.", "I like apples pears, and, grapes."]},
+    {"band": 1, "correct": "What time is it?", "wrong": ["What time is it.", "What time is it!", "What, time is it?"]},
+    {"band": 1, "correct": "Watch out for that car!", "wrong": ["Watch out for that car?", "Watch, out for that car.", "Watch out, for that car,"]},
+    {"band": 2, "correct": "My friend's bike is bright green.", "wrong": ["My friends bike is bright green.", "My friends' bike is bright green.", "My friend's bike is bright green?"]},
+    {"band": 2, "correct": "We can't go outside because it's raining.", "wrong": ["We cant go outside because its raining.", "We ca'nt go outside because it's raining.", "We can't go outside because its' raining."]},
+    {"band": 2, "correct": "On Saturday, we visited the zoo.", "wrong": ["On Saturday we visited, the zoo.", "On, Saturday we visited the zoo.", "On Saturday we visited the zoo,"]},
+    {"band": 3, "correct": "\"Let's go to the beach,\" said Mum.", "wrong": ["\"Lets go to the beach\" said Mum.", "\"Let's go to the beach.\" said Mum,", "Let's go to the beach, \"said Mum.\""]},
+    {"band": 3, "correct": "\"Where is my hat?\" asked Tom.", "wrong": ["\"Where is my hat\" asked Tom?", "\"Where is my hat,\" asked Tom?", "Where is my hat? \"asked Tom.\""]},
+    {"band": 3, "correct": "The dogs' kennels were cleaned this morning.", "wrong": ["The dogs kennels were cleaned this morning.", "The dog's kennels' were cleaned this morning.", "The dogs's kennels were cleaned this morning."]},
+    {"band": 4, "correct": "After the match, which lasted two hours, we had pizza.", "wrong": ["After the match which lasted two hours we had pizza.", "After the match, which lasted two hours we had pizza.", "After the match which, lasted two hours, we had pizza."]},
+    {"band": 4, "correct": "Sam packed sandwiches, crisps, a drink and a towel.", "wrong": ["Sam packed sandwiches crisps a drink and a towel.", "Sam packed, sandwiches, crisps, a drink, and a towel,", "Sam packed sandwiches, crisps, a drink, and, a towel."]},
+    {"band": 4, "correct": "Although it was late, the children weren't tired.", "wrong": ["Although it was late the children werent tired.", "Although, it was late the children weren't tired.", "Although it was late, the childrens' weren't tired."]},
+    {"band": 5, "correct": "We need three things: courage, patience and a torch.", "wrong": ["We need three things, courage, patience and a torch.", "We need three things; courage, patience and a torch:", "We need: three things courage, patience and a torch."]},
+    {"band": 5, "correct": "The storm raged all night; by morning, the garden was flooded.", "wrong": ["The storm raged all night, by morning the garden was flooded.", "The storm raged all night; by morning; the garden was flooded.", "The storm raged all night by morning, the garden was flooded;"]},
+    {"band": 5, "correct": "My cousin (who lives in Leeds) is visiting next week.", "wrong": ["My cousin (who lives in Leeds is visiting next week.", "My cousin who lives in Leeds) is visiting next week.", "My (cousin who lives in Leeds) is visiting, next week."]},
+    {"band": 5, "correct": "It's a well-known fact that octopuses have three hearts.", "wrong": ["Its a well-known fact that octopuses have three hearts.", "It's a well known-fact that octopuses have three hearts.", "It's a well-known fact, that octopuses have three hearts."]}
+  ]
+}
