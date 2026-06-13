@@ -1,7 +1,7 @@
 """Constants for the Learning Games integration."""
 
 DOMAIN = "learning_games"
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 STORAGE_VERSION = 1
 STORAGE_MINOR_VERSION = 1

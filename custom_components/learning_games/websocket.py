@@ -26,6 +26,7 @@ ERR_INVALID_MODE = "invalid_mode"
 def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_profiles)
     websocket_api.async_register_command(hass, ws_get_stats)
+    websocket_api.async_register_command(hass, ws_get_statistics)
     websocket_api.async_register_command(hass, ws_get_badges)
     websocket_api.async_register_command(hass, ws_start_session)
     websocket_api.async_register_command(hass, ws_submit_answer)
@@ -64,6 +65,18 @@ def ws_get_profiles(hass, connection, msg) -> None:
 def ws_get_stats(hass, connection, msg) -> None:
     if coordinator := _get_coordinator(hass, connection, msg):
         connection.send_result(msg["id"], coordinator.stats_payload())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/get_statistics",
+        vol.Required("profile_id"): str,
+    }
+)
+@callback
+def ws_get_statistics(hass, connection, msg) -> None:
+    if coordinator := _get_coordinator(hass, connection, msg):
+        connection.send_result(msg["id"], coordinator.statistics_payload())
 
 
 @websocket_api.websocket_command(

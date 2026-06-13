@@ -47,6 +47,10 @@ from .storage import ProfileStore, _default_daily, _default_weekly
 _LOGGER = logging.getLogger(__name__)
 
 MAX_HISTORY = 30
+# Per-day usage kept for the statistics heat map. A little over 4 weeks so the
+# card can always show a full contiguous 30-day window.
+DAILY_LOG_DAYS = 35
+STATS_WINDOW_DAYS = 30
 MAX_FREEZES = 2
 MAX_ACTIVE_SESSIONS = 4
 MAX_ACTIVE_ARCADES = 2
@@ -358,6 +362,7 @@ class ProfileCoordinator:
             if "fly_snap" not in bucket["modes_played"]:
                 bucket["modes_played"].append("fly_snap")
 
+        self._log_day(questions, counted_correct, xp)
         level_up = self._add_xp(xp, events)
 
         stats = self.data["arcade"]
@@ -437,6 +442,7 @@ class ProfileCoordinator:
             per_day["c"] += 1
         daily["xp_today"] += outcome.xp_delta
         self._add_xp(outcome.xp_delta, events)
+        self._log_day(1, 1 if outcome.correct else 0, outcome.xp_delta)
         self._sync_skills()
 
         deltas = {"questions": 1, "xp": outcome.xp_delta}
@@ -536,6 +542,7 @@ class ProfileCoordinator:
 
         bonus = ceil(XP_ROUND_COMPLETE * session.xp_multiplier)
         daily["xp_today"] += bonus
+        self._log_day(0, 0, bonus)
         level_up = self._add_xp(bonus, events)
 
         deltas = {"xp": bonus}
@@ -601,6 +608,18 @@ class ProfileCoordinator:
                 )
             )
         return new
+
+    def _log_day(self, questions: int, correct: int, xp: int) -> None:
+        """Accumulate today's usage into the rolling per-day log for the heat map."""
+        log = self.data.setdefault("daily_log", {})
+        today_iso = self.data["daily"]["date"]
+        entry = log.setdefault(today_iso, {"q": 0, "c": 0, "xp": 0})
+        entry["q"] += questions
+        entry["c"] += correct
+        entry["xp"] += xp
+        cutoff = (self._today() - timedelta(days=DAILY_LOG_DAYS)).isoformat()
+        for stale in [d for d in log if d < cutoff]:
+            del log[stale]
 
     def _sync_skills(self) -> None:
         self.data["skills"] = {
@@ -690,6 +709,82 @@ class ProfileCoordinator:
                 "wins": self.data["arcade"]["wins"],
                 "best_round": self.data["arcade"]["best_round"],
             },
+        }
+
+    def statistics_payload(self) -> dict:
+        """Richer stats for the parent/player statistics screen.
+
+        Returns a contiguous 30-day usage log (for the heat map), per-skill
+        accuracy, and the strongest/weakest practised areas.
+        """
+        self._check_rollover()
+        today = self._today()
+        log = self.data.get("daily_log", {})
+
+        days: list[dict] = []
+        total_q = total_c = total_xp = active_days = 0
+        for offset in range(STATS_WINDOW_DAYS - 1, -1, -1):
+            day = (today - timedelta(days=offset)).isoformat()
+            entry = log.get(day, {})
+            q = int(entry.get("q", 0))
+            c = int(entry.get("c", 0))
+            x = int(entry.get("xp", 0))
+            days.append({"date": day, "questions": q, "correct": c, "xp": x})
+            total_q += q
+            total_c += c
+            total_xp += x
+            if q:
+                active_days += 1
+
+        skills: list[dict] = []
+        for skill, state in self.skills.items():
+            accuracy = (
+                round(state.correct / state.attempts * 100) if state.attempts else None
+            )
+            skills.append(
+                {
+                    "skill": skill,
+                    "subject": skill.split(".", 1)[0],
+                    "band": state.band,
+                    "mastery": round(state.mastery),
+                    "attempts": state.attempts,
+                    "correct": state.correct,
+                    "accuracy": accuracy,
+                }
+            )
+        practised = [s for s in skills if s["attempts"] > 0]
+        strongest = sorted(practised, key=lambda s: s["mastery"], reverse=True)[:3]
+        weakest = sorted(practised, key=lambda s: s["mastery"])[:3]
+
+        level, into, to_next = level_progress(self.data["xp"]["total"])
+        return {
+            "profile_id": self.profile_id,
+            "name": self.name,
+            "avatar": self.avatar,
+            "xp": {
+                "total": self.data["xp"]["total"],
+                "level": level,
+                "into_level": into,
+                "to_next": to_next,
+            },
+            "streak": {
+                "current": self.data["streak"]["current"],
+                "best": self.data["streak"]["best"],
+            },
+            "window_days": STATS_WINDOW_DAYS,
+            "totals": {
+                "questions": total_q,
+                "correct": total_c,
+                "xp": total_xp,
+                "active_days": active_days,
+                "accuracy": round(total_c / total_q * 100) if total_q else None,
+            },
+            "days": days,
+            "max_day": max((d["questions"] for d in days), default=0),
+            "skills": skills,
+            "strongest": strongest,
+            "weakest": weakest,
+            "badge_count": len(self.data["badges"]),
         }
 
     def badges_payload(self) -> dict:

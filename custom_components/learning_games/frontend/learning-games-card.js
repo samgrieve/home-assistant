@@ -36,6 +36,7 @@
         profiles: null,
         profile: null,       // {profile_id, name, avatar, ...}
         stats: null,
+        statistics: null,
         badges: null,
         session: null,       // {session_id, total}
         mode: null,          // mode id of the active round
@@ -252,6 +253,19 @@
         this._render();
       } catch (err) {
         this._setError("Couldn't load badges right now.");
+      }
+    }
+
+    async _showStats() {
+      try {
+        this.S.statistics = await this._ws({
+          type: "learning_games/get_statistics",
+          profile_id: this.S.profile.profile_id,
+        });
+        this.S.screen = "stats";
+        this._render();
+      } catch (err) {
+        this._setError("Couldn't load statistics right now.");
       }
     }
 
@@ -824,6 +838,7 @@
         case "home": this._sound("tap"); this._goHome(); break;
         case "quit": this._quitRound(); break;
         case "badges": this._sound("tap"); this._showBadges(); break;
+        case "stats": this._sound("tap"); this._showStats(); break;
         case "again": this._sound("tap"); this._startRound(this.S.mode); break;
         case "answer": this._submit(data.value); break;
         case "key": this._keypadPress(data.key); break;
@@ -863,6 +878,7 @@
       else if (screen === "game") html = this._tplGame();
       else if (screen === "results") html = this._tplResults();
       else if (screen === "badges") html = this._tplBadges();
+      else if (screen === "stats") html = this._tplStats();
       else if (screen === "arcade_setup") html = this._tplArcadeSetup();
       else if (screen === "arcade") html = this._tplArcade();
       else if (screen === "arcade_results") html = this._tplArcadeResults();
@@ -953,7 +969,10 @@
             <span class="mstars">${s.arcade.wins ? `👑×${s.arcade.wins}` : `best: round ${s.arcade.best_round}`}</span>
           </button>` : ""}
         </div>
-        <button class="btn ghost wide" data-action="badges">🏅 My badges (${s.badge_count})</button>
+        <div class="home-footer">
+          <button class="btn ghost" data-action="badges">🏅 Badges (${s.badge_count})</button>
+          <button class="btn ghost" data-action="stats">📊 Statistics</button>
+        </div>
       `;
     }
 
@@ -1125,6 +1144,76 @@
           ${b.earned.map((x) => card(x, false)).join("")}
           ${b.locked.map((x) => card(x, true)).join("")}
         </div>`;
+    }
+
+    _tplStats() {
+      const st = this.S.statistics;
+      const t = st.totals;
+      const summary = [
+        { icon: "🏆", label: "Level", value: st.xp.level },
+        { icon: "🔥", label: "Best streak", value: `${st.streak.best}d` },
+        { icon: "✏️", label: `Questions (${st.window_days}d)`, value: t.questions },
+        { icon: "🎯", label: "Accuracy", value: t.accuracy == null ? "—" : `${t.accuracy}%` },
+        { icon: "📅", label: "Active days", value: `${t.active_days}/${st.window_days}` },
+        { icon: "⭐", label: "Total XP", value: st.xp.total },
+      ];
+      const skillRow = (s) => {
+        const [c1, c2] = SUBJECT_COLORS[s.subject] || SUBJECT_COLORS.maths;
+        return `<div class="srow">
+          <span class="sname">${esc(prettySkill(s.skill))}</span>
+          <div class="sbar"><div class="sfill" style="width:${s.mastery}%;
+            background:linear-gradient(90deg,${c1},${c2})"></div></div>
+          <span class="sval">${s.accuracy == null ? "—" : `${s.accuracy}%`}</span>
+        </div>`;
+      };
+      const areas = (st.strongest.length || st.weakest.length)
+        ? `<div class="subject-label">💪 Strongest</div>
+           <div class="slist">${st.strongest.map(skillRow).join("")}</div>
+           <div class="subject-label">🌱 Keep practising</div>
+           <div class="slist">${st.weakest.map(skillRow).join("")}</div>`
+        : `<p class="stats-empty">Play a few rounds to discover your strongest and weakest areas!</p>`;
+      return `
+        <div class="game-head">
+          <button class="btn tiny ghost" data-action="home">←</button>
+          <h3 class="bh">📊 Statistics</h3><span></span>
+        </div>
+        <div class="stat-grid">
+          ${summary.map((c) => `
+            <div class="stat-cell">
+              <span class="stat-icon">${c.icon}</span>
+              <span class="stat-value">${esc(String(c.value))}</span>
+              <span class="stat-label">${esc(c.label)}</span>
+            </div>`).join("")}
+        </div>
+        <div class="subject-label">Last ${st.window_days} days</div>
+        ${this._tplHeatmap(st)}
+        ${areas}
+      `;
+    }
+
+    _tplHeatmap(st) {
+      const days = st.days;
+      const max = st.max_day || 1;
+      const lvl = (q) => (q ? Math.min(4, Math.ceil((q / max) * 4)) : 0);
+      const [y, m, d] = days[0].date.split("-").map(Number);
+      const lead = (new Date(y, m - 1, d).getDay() + 6) % 7; // Monday-first
+      const labels = ["M", "T", "W", "T", "F", "S", "S"]
+        .map((l) => `<span class="hm-wd">${l}</span>`).join("");
+      const blanks = Array.from({ length: lead },
+        () => `<span class="hm-cell blank"></span>`).join("");
+      const cells = days.map((day) => {
+        const tip = `${day.date}: ${day.questions} question${day.questions === 1 ? "" : "s"}`;
+        return `<span class="hm-cell lvl${lvl(day.questions)}" title="${esc(tip)}"></span>`;
+      }).join("");
+      return `<div class="heatmap">
+        <div class="hm-weekdays">${labels}</div>
+        <div class="hm-cells">${blanks}${cells}</div>
+        <div class="hm-legend">
+          <span>Less</span>
+          ${[0, 1, 2, 3, 4].map((n) => `<span class="hm-cell lvl${n}"></span>`).join("")}
+          <span>More</span>
+        </div>
+      </div>`;
     }
 
     _tplArcadeSetup() {
@@ -1376,6 +1465,46 @@
     .badge .bname { font-weight: 800; font-size: 15px; }
     .badge .bdesc { font-size: 12.5px; opacity: 0.7; }
     .badge.locked { filter: grayscale(1); opacity: 0.55; }
+
+    .home-footer { display: flex; gap: 10px; margin-top: 14px; }
+    .home-footer .btn { flex: 1; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .stat-cell { background: #fff; border-radius: 16px; padding: 12px 8px;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      box-shadow: 0 3px 0 #f0e3d8; }
+    .stat-icon { font-size: 22px; }
+    .stat-value { font-size: 22px; font-weight: 800; }
+    .stat-label { font-size: 12px; opacity: 0.7; text-align: center; }
+
+    .heatmap { background: #fff; border-radius: 16px; padding: 12px;
+      box-shadow: 0 3px 0 #f0e3d8; }
+    .hm-weekdays, .hm-cells { display: grid; grid-template-columns: repeat(7, 1fr);
+      gap: 5px; }
+    .hm-weekdays { margin-bottom: 5px; }
+    .hm-wd { font-size: 11px; font-weight: 800; opacity: 0.5; text-align: center; }
+    .hm-cell { aspect-ratio: 1; border-radius: 5px; background: #efe8da; }
+    .hm-cell.blank { background: transparent; }
+    .hm-cell.lvl0 { background: #efe8da; }
+    .hm-cell.lvl1 { background: #C8E6C9; }
+    .hm-cell.lvl2 { background: #81C784; }
+    .hm-cell.lvl3 { background: #43A047; }
+    .hm-cell.lvl4 { background: #1B5E20; }
+    .hm-legend { display: flex; align-items: center; gap: 5px; margin-top: 10px;
+      justify-content: flex-end; font-size: 11px; opacity: 0.6; }
+    .hm-legend .hm-cell { width: 14px; height: 14px; aspect-ratio: auto; }
+
+    .slist { display: flex; flex-direction: column; gap: 8px; }
+    .srow { display: flex; align-items: center; gap: 10px; background: #fff;
+      border-radius: 14px; padding: 8px 12px; box-shadow: 0 3px 0 #f0e3d8; }
+    .sname { font-size: 14px; font-weight: 700; text-transform: capitalize;
+      flex: 0 0 38%; }
+    .sbar { flex: 1; height: 10px; background: #f0e9da; border-radius: 6px;
+      overflow: hidden; }
+    .sfill { height: 100%; border-radius: 6px;
+      transition: width 0.6s cubic-bezier(.2,.8,.2,1); }
+    .sval { font-size: 13px; font-weight: 800; min-width: 38px; text-align: right; }
+    .stats-empty { text-align: center; opacity: 0.7; font-size: 15px; margin: 20px 8px; }
 
     .chal-list { display: flex; flex-direction: column; gap: 8px; }
     .chal { display: flex; align-items: center; gap: 10px; background: #fff;
