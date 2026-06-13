@@ -73,6 +73,89 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     assert len(msg["result"]["locked"]) == 23
 
 
+async def test_get_statistics_empty_profile(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    client = await hass_ws_client(hass)
+    await client.send_json(
+        {"id": 1, "type": f"{DOMAIN}/get_statistics", "profile_id": entry.entry_id}
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    stats = msg["result"]
+    # A full contiguous 30-day window, all empty for a fresh profile.
+    assert len(stats["days"]) == 30
+    assert all(d["questions"] == 0 for d in stats["days"])
+    assert stats["totals"]["questions"] == 0
+    assert stats["totals"]["active_days"] == 0
+    assert stats["totals"]["accuracy"] is None
+    assert stats["max_day"] == 0
+    assert len(stats["skills"]) == 17
+    # Nothing practised yet, so no strongest/weakest.
+    assert stats["strongest"] == []
+    assert stats["weakest"] == []
+
+
+async def test_get_statistics_after_a_round(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass, daily_goal=5)
+    coordinator = hass.data[DOMAIN]["coordinators"][entry.entry_id]
+    client = await hass_ws_client(hass)
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": f"{DOMAIN}/start_session",
+            "profile_id": entry.entry_id,
+            "mode": "times_tables_blitz",
+            "length": 10,
+        }
+    )
+    msg = await client.receive_json()
+    session_id = msg["result"]["session_id"]
+    question = msg["result"]["question"]
+
+    msg_id = 2
+    for _ in range(10):
+        correct = coordinator.sessions[session_id].current.answer
+        await client.send_json(
+            {
+                "id": msg_id,
+                "type": f"{DOMAIN}/submit_answer",
+                "profile_id": entry.entry_id,
+                "session_id": session_id,
+                "question_id": question["question_id"],
+                "answer": correct,
+                "elapsed_ms": 1500,
+            }
+        )
+        msg = await client.receive_json()
+        msg_id += 1
+        if "results" in msg["result"]:
+            break
+        question = msg["result"]["next_question"]
+
+    await hass.async_block_till_done()
+
+    await client.send_json(
+        {"id": 99, "type": f"{DOMAIN}/get_statistics", "profile_id": entry.entry_id}
+    )
+    msg = await client.receive_json()
+    assert msg["success"]
+    stats = msg["result"]
+
+    today = stats["days"][-1]
+    assert today["questions"] == 10
+    assert today["correct"] == 10
+    assert today["xp"] > 0
+    assert stats["totals"]["questions"] == 10
+    assert stats["totals"]["active_days"] == 1
+    assert stats["totals"]["accuracy"] == 100
+    assert stats["max_day"] == 10
+    # Times Table Blitz only trains one skill, so it's the strongest practised.
+    assert stats["strongest"]
+    assert stats["strongest"][0]["skill"] == "maths.times_tables"
+    assert stats["strongest"][0]["accuracy"] == 100
+
+
 async def test_unknown_profile_errors(hass: HomeAssistant, hass_ws_client):
     await setup_profile(hass)
     client = await hass_ws_client(hass)

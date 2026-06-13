@@ -28,6 +28,7 @@ def default_data(name: str, avatar: str, created: str) -> dict:
         "skills": {skill: _default_skill() for skill in ALL_SKILLS},
         "badges": {},
         "history": [],
+        "daily_log": {},  # {iso_date: {"q": int, "c": int, "xp": int}} — last ~5 weeks
         "arcade": {"games": 0, "wins": 0, "best_round": 0, "categories_won": []},
     }
 

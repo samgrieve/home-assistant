@@ -24,6 +24,11 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 - 👾 **Boss Battle** — 10 questions drawn from her four weakest skills, at 1.5× XP, with a boss HP bar that drops with every correct answer. Score 7+ to make the boss flee!
 - 🐸 **Fly Snap** — a real-time arcade game: a frog sits on a lilypad with a word above it while six flies drift inward, each carrying a word. Tap the fly that matches (synonyms, antonyms or homophones). Survive 60 seconds to clear a round, beat 6 speeding-up rounds to win, and don't let a fly reach the lilypad — you have 3 lives.
 
+**📊 Statistics** (tap *Statistics* on the home screen)
+- Score summary: level, best streak, questions and accuracy over the last 30 days, active days and total XP
+- A GitHub-style **heat map** of daily usage across the last 30 days
+- **Strongest** and **keep practising** areas, ranked from per-skill mastery and accuracy
+
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
