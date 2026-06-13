@@ -18,7 +18,7 @@ PAIRS_PER_ROUND = 20
 DECOYS_PER_ROUND = 14
 ROUND_TIME_S = 60
 LIVES = 3
-TRAVEL_S = [18, 15, 12.5, 10.5, 9, 7.5]  # edge-to-lilypad seconds per round
+TRAVEL_S = [26, 22, 18, 15, 12, 9.5]  # edge-to-lilypad seconds per round
 
 # Settlement rules (anti-cheese clamps + XP)
 XP_SNAP = 5

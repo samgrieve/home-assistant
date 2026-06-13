@@ -520,7 +520,7 @@
       A.decoys = [...A.game.rounds_data[A.round - 1].decoys];
       A.pairIdx = 0;
       this._shuffle(A.pairs);
-      A.flies = els.flies.map((el) => ({ el, x: 0, y: 0, word: "" }));
+      A.flies = els.flies.map((el, i) => ({ el, x: 0, y: 0, word: "", slot: i }));
       A.flies.forEach((f) => this._flyToEdge(f));
       this._arcadeDealAll();
       A.lastTs = performance.now();
@@ -542,10 +542,16 @@
 
     _flyToEdge(fly) {
       const { w, h } = this._pondSize();
-      const angle = Math.random() * Math.PI * 2;
+      // Each fly owns a fixed angular sector around the pond, so every fly
+      // travels in a straight line toward the lilypad without crossing or
+      // covering its neighbours. A small jitter inside the sector keeps the
+      // spawns from looking too mechanical while preserving the gap.
+      const total = this.A.flies.length;
+      const sector = (Math.PI * 2) / total;
+      const jitter = (Math.random() - 0.5) * sector * 0.4;
+      const angle = fly.slot * sector + jitter;
       fly.x = w / 2 + Math.cos(angle) * (w / 2 - 8);
       fly.y = h / 2 + Math.sin(angle) * (h / 2 - 8);
-      fly.wobblePhase = Math.random() * Math.PI * 2;
       this._flyPaint(fly);
     }
 
@@ -652,10 +658,8 @@
         const dx = cx - fly.x;
         const dy = cy - fly.y;
         const dist = Math.hypot(dx, dy) || 1;
-        fly.wobblePhase += dt * 5;
-        const wobble = Math.sin(fly.wobblePhase) * 14;
-        fly.x += (dx / dist) * speed * dt + (-dy / dist) * wobble * dt;
-        fly.y += (dy / dist) * speed * dt + (dx / dist) * wobble * dt;
+        fly.x += (dx / dist) * speed * dt;
+        fly.y += (dy / dist) * speed * dt;
         this._flyPaint(fly);
         if (dist < 46) lost = true;
       }
