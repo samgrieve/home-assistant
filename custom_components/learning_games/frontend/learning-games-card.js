@@ -1213,12 +1213,13 @@
       overflow: hidden;
       background: linear-gradient(180deg, #FFF7E6 0%, #FFEFF5 100%);
       color: #2D3436;
+      color-scheme: light;
       font-family: "Comic Sans MS", "Chalkboard SE", "Segoe UI", system-ui, sans-serif;
     }
     .wrap { position: relative; padding: 16px; min-height: 480px; }
     #fx { position: absolute; inset: 0; width: 100%; height: 100%;
           pointer-events: none; z-index: 5; }
-    button { font-family: inherit; border: none; cursor: pointer;
+    button { font-family: inherit; border: none; cursor: pointer; color: #2D3436;
              -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
     button:active { transform: scale(0.96); }
     .center { display: flex; flex-direction: column; align-items: center;
