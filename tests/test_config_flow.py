@@ -72,4 +72,24 @@ async def test_options_flow(hass: HomeAssistant):
         result["flow_id"], {CONF_AVATAR: "dragon", CONF_DAILY_GOAL: 30}
     )
     assert result["type"] == "create_entry"
-    assert entry.options == {CONF_AVATAR: "dragon", CONF_DAILY_GOAL: 30}
+    assert entry.options == {CONF_AVATAR: "dragon", CONF_DAILY_GOAL: 30, "parent_users": []}
+
+
+async def test_options_flow_parent_users(hass: HomeAssistant, hass_admin_user):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Maya",
+        unique_id=f"{DOMAIN}_maya",
+        data={CONF_NAME: "Maya", CONF_AVATAR: "fox", CONF_DAILY_GOAL: 20},
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_AVATAR: "fox", CONF_DAILY_GOAL: 20, "parent_users": [hass_admin_user.id]},
+    )
+    assert result["type"] == "create_entry"
+    assert entry.options["parent_users"] == [hass_admin_user.id]

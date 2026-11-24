@@ -29,17 +29,28 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 - A GitHub-style **heat map** of daily usage across the last 30 days
 - **Strongest** and **keep practising** areas, ranked from per-skill mastery and accuracy
 
+**📔 Learning Journal** (tap *My Journal* on the home screen)
+- Each day she ticks the subjects she did *outside* the games (12 starter subjects, add your own)
+- Every ticked subject gets a quick rating: how much she enjoyed it (5 faces) and how hard it was (Easy / OK / Tricky), plus an optional note
+- Three short prompts: *What did I do? What did I enjoy? What was easy or tricky?*
+- She can write about today or catch up on the last 2 days; older entries are locked
+- Adding a subject always shows the existing list first and asks "Did you mean Science?" for near-duplicates. Parents can rename, hide or **merge** subjects, and merging moves past entries across
+- Per-subject history: how often each subject is done, average enjoyment, the easy-to-tricky split and the enjoyment trend
+- +15 XP for her first entry each day. It does **not** count toward the daily question goal
+- Parents (set in the integration options) can react with a sticker and leave a note, and she sees "💌 Dad sent you ⭐" on her home screen
+
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
 - **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze
-- 23 badges to collect, per-skill mastery stars on every game tile
+- 27 badges to collect, per-skill mastery stars on every game tile
 - Adaptive difficulty: each of the 17 tracked skills moves up/down 5 bands automatically
 
 **For parents**
 - Sensors: level, streak, questions today, accuracy, maths/English mastery (per-skill detail in attributes), last badge, weekly summary
 - `binary_sensor.<name>_daily_goal_met` — the prime automation hook
-- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`, `learning_games_challenge_complete`
+- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`, `learning_games_challenge_complete`, `learning_games_journal_entry`, `learning_games_journal_reviewed`
+- `sensor.<name>_journal`: state is the date of the latest entry; attributes are `total_entries`, `entries_this_week`, `journal_streak`, `unreviewed_count`, `last_entry` and a per-subject summary. Journal text is never put in attributes, so it stays out of the recorder
 - `sensor.<name>_weekly_challenges_done` (0–3) with the full challenge list in attributes
 - All answers are checked server-side — no peeking at the answer in the browser
 
@@ -68,11 +79,39 @@ type: custom:learning-games-card
 # sounds: false      # turn off the bleeps
 ```
 
+4. *(Optional, for the journal)* **Settings → Devices & services → Learning
+   Games → Configure** and tick the Home Assistant users who are parents. They
+   can then react to and reply to journal entries, and manage the subject list.
+
 A panel-view dashboard works best on a tablet:
 Dashboard → ⋮ → Edit → ⋮ → *Raw configuration editor*, or just place the card
 in a single-column view.
 
 ## Reward automation recipes
+
+**Notify parents when a journal entry is written** (tapping the notification
+opens that entry in the card):
+
+```yaml
+automation:
+  - alias: Learning journal - new entry
+    mode: queued
+    triggers:
+      - trigger: event
+        event_type: learning_games_journal_entry
+        event_data:
+          is_update: false
+    actions:
+      - action: notify.mobile_app_parent_phone
+        data:
+          title: "📔 {{ trigger.event.data.name }} wrote in their journal"
+          message: >-
+            {{ trigger.event.data.mood_emoji }} {{ trigger.event.data.subjects | join(', ') }}
+            {{ trigger.event.data.snippet }}
+          data:
+            url: "/learning-games/0{{ trigger.event.data.url }}"
+            clickAction: "/learning-games/0{{ trigger.event.data.url }}"
+```
 
 **Announce the daily goal on a speaker:**
 

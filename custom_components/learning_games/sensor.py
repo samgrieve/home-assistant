@@ -125,6 +125,11 @@ SENSORS: tuple[LearningGamesSensorDescription, ...] = (
             "week_start": c.data["weekly"]["week_start"],
         },
     ),
+    LearningGamesSensorDescription(
+        "journal", "Journal", "mdi:notebook-heart", None,
+        lambda c: max(c.data["journal"]["entries"]) if c.data["journal"]["entries"] else None,
+        lambda c: c.journal_sensor_attrs(),
+    ),
 )
 
 

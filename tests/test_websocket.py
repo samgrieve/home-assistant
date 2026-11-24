@@ -70,7 +70,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert msg["result"]["earned"] == []
-    assert len(msg["result"]["locked"]) == 23
+    assert len(msg["result"]["locked"]) == 27
 
 
 async def test_get_statistics_empty_profile(hass: HomeAssistant, hass_ws_client):
@@ -430,3 +430,150 @@ async def test_invalid_mode_errors(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "invalid_mode"
+
+
+# ---------------------------------------------------------------- learning journal
+
+
+async def test_journal_entry_flow(hass: HomeAssistant, hass_ws_client):
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    client = await hass_ws_client(hass)
+    events = async_capture_events(hass, "learning_games_journal_entry")
+    goal_events = async_capture_events(hass, EVENT_DAILY_GOAL)
+
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    msg = await client.receive_json()
+    assert msg["success"]
+    j = msg["result"]
+    assert j["entry"] is None and j["is_parent"] is False
+    assert len(j["editable_dates"]) == 3
+    assert any(s["id"] == "science" for s in j["subjects"])
+    today = j["today"]
+
+    save = {
+        "type": f"{DOMAIN}/journal/save_entry",
+        "profile_id": pid,
+        "date": today,
+        "mood": 5,
+        "subjects": [{"id": "science", "enjoy": 5, "difficulty": "easy", "note": "Magnets"}],
+        "did": "Made a compass with a magnet",
+        "enjoyed": "",
+        "tricky": "",
+    }
+    await client.send_json({"id": 2, **save})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    res = msg["result"]
+    assert res["xp_gained"] == 15 and res["is_update"] is False
+    assert "dear_diary" in [b["id"] for b in res["new_badges"]]
+
+    # Editing doesn't award XP again and flags the event as an update.
+    await client.send_json({"id": 3, **save, "tricky": "North vs south pole"})
+    msg = await client.receive_json()
+    assert msg["result"]["xp_gained"] == 0 and msg["result"]["is_update"] is True
+    await hass.async_block_till_done()
+
+    assert [e.data["is_update"] for e in events] == [False, True]
+    assert events[0].data["subjects"] == ["Science"]
+    assert events[0].data["url"] == f"?lg=journal&date={today}"
+    assert events[0].data["snippet"] == "Made a compass with a magnet"
+    # Journal never counts toward the daily question goal.
+    assert goal_events == []
+    assert hass.states.get("binary_sensor.maya_s_learning_games_daily_goal_met").state == "off"
+    level = hass.states.get("sensor.maya_s_learning_games_level")
+    assert level.attributes["xp_total"] == 15
+
+    state = hass.states.get("sensor.maya_s_learning_games_journal")
+    assert state.state == today
+    assert state.attributes["total_entries"] == 1
+    assert state.attributes["journal_streak"] == 1
+    assert state.attributes["unreviewed_count"] == 1
+    assert state.attributes["subjects"]["Science"]["count"] == 1
+    assert "did" not in str(state.attributes["last_entry"])  # no free text in the recorder
+
+    # Back-filling 3 days ago is refused.
+    from datetime import date, timedelta
+
+    old = (date.fromisoformat(today) - timedelta(days=3)).isoformat()
+    await client.send_json({"id": 4, **save, "date": old})
+    msg = await client.receive_json()
+    assert not msg["success"] and msg["error"]["code"] == "date_locked"
+
+
+async def test_journal_add_subject_dedupes(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    client = await hass_ws_client(hass)
+    base = {"type": f"{DOMAIN}/journal/add_subject", "profile_id": entry.entry_id}
+
+    await client.send_json({"id": 1, **base, "name": "science"})
+    msg = await client.receive_json()
+    assert msg["result"]["status"] == "exists"
+
+    await client.send_json({"id": 2, **base, "name": "Sciense"})
+    msg = await client.receive_json()
+    assert msg["result"]["status"] == "similar"
+    assert msg["result"]["similar"][0]["name"] == "Science"
+
+    await client.send_json({"id": 3, **base, "name": "Piano", "emoji": "🎹"})
+    msg = await client.receive_json()
+    assert msg["result"]["status"] == "added"
+
+
+async def test_journal_review_requires_parent(
+    hass: HomeAssistant, hass_ws_client, hass_admin_user,
+    hass_read_only_user, hass_read_only_access_token,
+):
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    reviewed = async_capture_events(hass, "learning_games_journal_reviewed")
+    kid = await hass_ws_client(hass, access_token=hass_read_only_access_token)
+    await kid.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    today = (await kid.receive_json())["result"]["today"]
+    await kid.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": today, "subjects": [{"id": "art", "enjoy": 4}],
+    })
+    assert (await kid.receive_json())["success"]
+
+    review = {"type": f"{DOMAIN}/journal/review", "profile_id": pid,
+              "date": today, "reaction": "⭐", "comment": "Lovely!"}
+    await kid.send_json({"id": 3, **review})
+    msg = await kid.receive_json()
+    assert not msg["success"] and msg["error"]["code"] == "not_parent"
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "parent_users": [hass_admin_user.id]}
+    )
+    await hass.async_block_till_done()
+    parent = await hass_ws_client(hass)
+    await parent.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    assert (await parent.receive_json())["result"]["is_parent"] is True
+    await parent.send_json({"id": 2, **review})
+    msg = await parent.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["reviews"][0]["reaction"] == "⭐"
+    await hass.async_block_till_done()
+    assert reviewed[0].data["comment"] == "Lovely!"
+
+    # Lizzie sees the sticker on her home screen until she opens it.
+    await kid.send_json({"id": 4, "type": f"{DOMAIN}/get_stats", "profile_id": pid})
+    stats = (await kid.receive_json())["result"]
+    assert stats["journal"]["done_today"] is True
+    assert stats["journal"]["unseen_reviews"][0]["date"] == today
+    await kid.send_json({"id": 5, "type": f"{DOMAIN}/journal/mark_seen", "profile_id": pid})
+    assert (await kid.receive_json())["success"]
+    await kid.send_json({"id": 6, "type": f"{DOMAIN}/get_stats", "profile_id": pid})
+    assert (await kid.receive_json())["result"]["journal"]["unseen_reviews"] == []
+
+    # Only parents may merge subjects.
+    merge = {"type": f"{DOMAIN}/journal/merge_subjects", "profile_id": pid,
+             "source_id": "art", "target_id": "music"}
+    await kid.send_json({"id": 7, **merge})
+    assert (await kid.receive_json())["error"]["code"] == "not_parent"
+    await parent.send_json({"id": 3, **merge})
+    assert (await parent.receive_json())["success"]

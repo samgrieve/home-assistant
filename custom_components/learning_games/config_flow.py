@@ -14,7 +14,17 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import AVATARS, CONF_AVATAR, CONF_DAILY_GOAL, CONF_NAME, DEFAULT_DAILY_GOAL, DOMAIN
+from homeassistant.helpers.selector import SelectOptionDict
+
+from .const import (
+    AVATARS,
+    CONF_AVATAR,
+    CONF_DAILY_GOAL,
+    CONF_NAME,
+    CONF_PARENT_USERS,
+    DEFAULT_DAILY_GOAL,
+    DOMAIN,
+)
 
 AVATAR_SELECTOR = SelectSelector(
     SelectSelectorConfig(
@@ -66,7 +76,7 @@ class LearningGamesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Adjust avatar and daily goal."""
+    """Adjust avatar, daily goal and which HA users are parents."""
 
     def __init__(self, config_entry) -> None:
         # Newer cores expose self.config_entry as a property; older ones need it set.
@@ -80,9 +90,22 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 data={
                     CONF_AVATAR: user_input[CONF_AVATAR],
                     CONF_DAILY_GOAL: int(user_input[CONF_DAILY_GOAL]),
+                    CONF_PARENT_USERS: list(user_input.get(CONF_PARENT_USERS, [])),
                 },
             )
         entry = self.config_entry
+        users = [
+            u for u in await self.hass.auth.async_get_users()
+            if not u.system_generated and u.is_active
+        ]
+        user_options = [
+            SelectOptionDict(value=u.id, label=u.name or u.id)
+            for u in sorted(users, key=lambda u: (u.name or "").lower())
+        ]
+        known_ids = {u.id for u in users}
+        current_parents = [
+            uid for uid in entry.options.get(CONF_PARENT_USERS, []) if uid in known_ids
+        ]
         current_avatar = entry.options.get(CONF_AVATAR, entry.data.get(CONF_AVATAR, "fox"))
         current_goal = entry.options.get(
             CONF_DAILY_GOAL, entry.data.get(CONF_DAILY_GOAL, DEFAULT_DAILY_GOAL)
@@ -93,6 +116,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 {
                     vol.Required(CONF_AVATAR, default=current_avatar): AVATAR_SELECTOR,
                     vol.Required(CONF_DAILY_GOAL, default=current_goal): GOAL_SELECTOR,
+                    vol.Optional(CONF_PARENT_USERS, default=current_parents): SelectSelector(
+                        SelectSelectorConfig(
+                            options=user_options,
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
                 }
             ),
         )

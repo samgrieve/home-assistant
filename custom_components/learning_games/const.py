@@ -1,7 +1,7 @@
 """Constants for the Learning Games integration."""
 
 DOMAIN = "learning_games"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 STORAGE_VERSION = 1
 STORAGE_MINOR_VERSION = 1
@@ -9,6 +9,7 @@ STORAGE_MINOR_VERSION = 1
 CONF_NAME = "name"
 CONF_AVATAR = "avatar"
 CONF_DAILY_GOAL = "daily_goal"
+CONF_PARENT_USERS = "parent_users"
 
 DEFAULT_DAILY_GOAL = 20
 
@@ -24,6 +25,8 @@ EVENT_BADGE_EARNED = "learning_games_badge_earned"
 EVENT_STREAK_MILESTONE = "learning_games_streak_milestone"
 EVENT_SESSION_COMPLETE = "learning_games_session_complete"
 EVENT_CHALLENGE_COMPLETE = "learning_games_challenge_complete"
+EVENT_JOURNAL_ENTRY = "learning_games_journal_entry"
+EVENT_JOURNAL_REVIEWED = "learning_games_journal_reviewed"
 
 STREAK_MILESTONES = (3, 7, 14, 30, 50, 100)
 

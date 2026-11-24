@@ -23,6 +23,17 @@
     { id: "homophones", label: "Homophones", emoji: "👯", blurb: "Words that sound the same" },
   ];
 
+  const MOODS = [["😞", "Rubbish"], ["😕", "Meh"], ["😐", "OK"], ["🙂", "Good"], ["😄", "Brilliant"]];
+  const ENJOY = [["😖", "Not at all"], ["😕", "A bit"], ["😐", "It was OK"], ["😊", "Enjoyed it"], ["🤩", "Loved it"]];
+  const DIFFS = [["easy", "😌", "Easy"], ["ok", "🤔", "OK"], ["tricky", "😤", "Tricky"]];
+  const DIFF_LABEL = { easy: "😌 easy", ok: "🤔 ok", tricky: "😤 tricky" };
+  const PROMPTS = [
+    ["did", "📝 What did I do?", "I made a volcano at science club…"],
+    ["enjoyed", "😊 What did I enjoy?", "The best bit was…"],
+    ["tricky", "🧗 What was easy or tricky?", "I found … easy, but … was hard"],
+  ];
+  const SUBJECT_EMOJIS = ["📘", "🎹", "🎸", "🩰", "🏊", "🧪", "🌱", "🧩", "🗣️", "🎭", "🧶", "⛪", "🐾", "🍳", "🧮", "🗺️"];
+
   const PRAISE = ["Brilliant!", "Nailed it!", "Super!", "You star!", "Wowza!", "Genius!"];
   const NUDGE = ["Nearly!", "Good try!", "Keep going!", "You'll get it!"];
 
@@ -49,6 +60,17 @@
         busy: false,
         bossHits: 0,
         arcadeResults: null,
+        journal: null,       // journal/get payload
+        jview: "write",      // write | history | saved | subjects
+        jd: null,            // draft for the selected day (lives in jDrafts)
+        jDrafts: {},
+        jAdd: null,          // add-subject panel state
+        jSaved: null,
+        jMsg: null,
+        jFocus: null,
+        jComments: {},
+        jRename: {},
+        jMergeSel: {},
       };
       this.A = null; // live Fly Snap state — never touched by _render()
       this._onVisibility = () => {
@@ -111,7 +133,12 @@
         }
         if (chosen) {
           this.S.profile = chosen;
-          await this._goHome();
+          const params = new URLSearchParams(window.location.search);
+          if (params.get("lg") === "journal") {
+            await this._openJournal(params.get("date") || null);
+          } else {
+            await this._goHome();
+          }
         } else if (profiles.length === 0) {
           this._setError("No player profiles yet. Add one in Settings → Devices & services → Learning Games.");
         } else {
@@ -828,10 +855,22 @@
         if (!el) return;
         this._handleAction(el.dataset.action, el.dataset);
       });
+      // Typing only updates state — never re-renders, so text and focus survive.
+      const onInput = (ev) => this._jInput(ev.composedPath()[0]);
+      this.shadowRoot.addEventListener("input", onInput);
+      this.shadowRoot.addEventListener("change", onInput);
+      this.shadowRoot.addEventListener("keydown", (ev) => {
+        const el = ev.composedPath()[0];
+        if (ev.key === "Enter" && el.dataset && el.dataset.jaddname !== undefined) {
+          ev.preventDefault();
+          this._jAddSubject(false);
+        }
+      });
       this._render();
     }
 
     _handleAction(action, data) {
+      if (action.startsWith("j") && this._jHandleAction(action, data)) return;
       switch (action) {
         case "pick-profile": {
           this.S.profile = this.S.profiles.find((p) => p.profile_id === data.id);
@@ -886,6 +925,7 @@
       else if (screen === "arcade_setup") html = this._tplArcadeSetup();
       else if (screen === "arcade") html = this._tplArcade();
       else if (screen === "arcade_results") html = this._tplArcadeResults();
+      else if (screen === "journal") html = this._tplJournal();
       else if (screen === "error") html = this._tplError();
       root.innerHTML = html;
     }
@@ -957,6 +997,7 @@
           </div>
           <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
         </div>
+        ${this._tplHomeJournal(s)}
         ${this._tplChallengesSection(s)}
         <div class="subject-label">Maths</div>
         <div class="mode-grid">${maths.map(tile).join("")}</div>
@@ -977,7 +1018,19 @@
           <button class="btn ghost" data-action="badges">🏅 Badges (${s.badge_count})</button>
           <button class="btn ghost" data-action="stats">📊 Statistics</button>
         </div>
+        <button class="btn ghost wide jhome-btn" data-action="journal">
+          📔 My Journal${s.journal && s.journal.done_today ? ` <span class="jdone">✓ done today</span>` : ""}
+        </button>
       `;
+    }
+
+    _tplHomeJournal(s) {
+      const unseen = (s.journal && s.journal.unseen_reviews) || [];
+      if (!unseen.length) return "";
+      const last = unseen[0].reviews[unseen[0].reviews.length - 1];
+      return `<button class="jbanner home" data-action="journal">
+        💌 <b>${esc(last.user_name)}</b> sent you ${esc(last.reaction || "a message")} about your journal — tap to read
+      </button>`;
     }
 
     _tplChallengesSection(s) {
@@ -1192,6 +1245,9 @@
         <div class="subject-label">Last ${st.window_days} days</div>
         ${this._tplHeatmap(st)}
         ${areas}
+        ${st.journal_stats && st.journal_stats.length ? `
+          <div class="subject-label">📔 Journal subjects</div>
+          ${this._tplSubjectStats(st.journal_stats)}` : ""}
       `;
     }
 
@@ -1284,6 +1340,568 @@
             <button class="btn ghost" data-action="home">Home</button>
           </div>
         </div>`;
+    }
+
+    // ------------------------------------------------------------ learning journal
+
+    _draftKey(date) {
+      return `lg-journal-draft:${this.S.profile ? this.S.profile.profile_id : ""}:${date}`;
+    }
+
+    _draftFromEntry(date, entry) {
+      const d = {
+        date, mood: null, ticked: [], ratings: {},
+        did: "", enjoyed: "", tricky: "", dirty: false,
+      };
+      if (entry) {
+        d.mood = entry.mood;
+        d.did = entry.did || "";
+        d.enjoyed = entry.enjoyed || "";
+        d.tricky = entry.tricky || "";
+        for (const s of entry.subjects) {
+          d.ticked.push(s.id);
+          d.ratings[s.id] = { enjoy: s.enjoy, difficulty: s.difficulty, note: s.note || "" };
+        }
+      }
+      // An unsaved draft from before a page refresh wins over the stored entry.
+      try {
+        const saved = localStorage.getItem(this._draftKey(date));
+        if (saved) Object.assign(d, JSON.parse(saved), { dirty: true });
+      } catch (err) { /* storage unavailable — fine */ }
+      return d;
+    }
+
+    _persistDraft() {
+      const d = this.S.jd;
+      if (!d) return;
+      d.dirty = true;
+      try {
+        const { dirty, ...rest } = d;
+        localStorage.setItem(this._draftKey(d.date), JSON.stringify(rest));
+      } catch (err) { /* storage unavailable — fine */ }
+    }
+
+    _clearDraft(date) {
+      delete this.S.jDrafts[date];
+      try { localStorage.removeItem(this._draftKey(date)); } catch (err) { /* fine */ }
+    }
+
+    async _openJournal(date, view) {
+      try {
+        const res = await this._ws({
+          type: "learning_games/journal/get",
+          profile_id: this.S.profile.profile_id,
+          ...(date ? { date } : {}),
+        });
+        this.S.journal = res;
+        if (!this.S.jDrafts[res.date]) {
+          this.S.jDrafts[res.date] = this._draftFromEntry(res.date, res.entry);
+        }
+        this.S.jd = this.S.jDrafts[res.date];
+        this.S.jMsg = null;
+        this.S.jAdd = null;
+        const editable = res.editable_dates.includes(res.date);
+        this.S.jview = view || (res.is_parent || !editable ? "history" : "write");
+        this.S.jFocus = date && this.S.jview === "history" ? date : null;
+        this.S.screen = "journal";
+        this._render();
+        if (this.S.jFocus) {
+          const el = this.shadowRoot.getElementById(`jentry-${this.S.jFocus}`);
+          if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+      } catch (err) {
+        this._setError("Couldn't open your journal right now.");
+      }
+    }
+
+    async _refreshJournal() {
+      try {
+        this.S.journal = await this._ws({
+          type: "learning_games/journal/get",
+          profile_id: this.S.profile.profile_id,
+          date: this.S.jd ? this.S.jd.date : undefined,
+        });
+      } catch (err) { /* keep the old copy */ }
+    }
+
+    _jToggleSubject(id) {
+      const d = this.S.jd;
+      const i = d.ticked.indexOf(id);
+      if (i >= 0) d.ticked.splice(i, 1);
+      else {
+        d.ticked.push(id);
+        if (!d.ratings[id]) d.ratings[id] = { enjoy: null, difficulty: null, note: "" };
+      }
+      this._persistDraft();
+      this._render();
+    }
+
+    async _jAddSubject(force) {
+      const add = this.S.jAdd;
+      const name = (add.name || "").trim();
+      if (!name || this.S.busy) return;
+      this.S.busy = true;
+      try {
+        const res = await this._ws({
+          type: "learning_games/journal/add_subject",
+          profile_id: this.S.profile.profile_id,
+          name, emoji: add.emoji || "", force: !!force,
+        });
+        if (res.status === "similar") {
+          add.similar = res.similar;
+        } else {
+          await this._refreshJournal();
+          this.S.jAdd = null;
+          if (!this.S.jd.ticked.includes(res.subject.id)) this._jToggleSubject(res.subject.id);
+          this._sound("correct");
+        }
+      } catch (err) {
+        add.error = (err && err.message) || "Couldn't add that subject.";
+      } finally {
+        this.S.busy = false;
+        this._render();
+      }
+    }
+
+    async _jSave() {
+      const d = this.S.jd;
+      if (this.S.busy) return;
+      const hasText = (d.did + d.enjoyed + d.tricky).trim().length > 0;
+      if (!d.ticked.length && !hasText) {
+        this.S.jMsg = "Tick a subject or write something first ✏️";
+        this._render();
+        return;
+      }
+      this.S.busy = true;
+      try {
+        const res = await this._ws({
+          type: "learning_games/journal/save_entry",
+          profile_id: this.S.profile.profile_id,
+          date: d.date,
+          mood: d.mood,
+          subjects: d.ticked.map((id) => ({
+            id,
+            enjoy: d.ratings[id] ? d.ratings[id].enjoy : null,
+            difficulty: d.ratings[id] ? d.ratings[id].difficulty : null,
+            note: d.ratings[id] ? d.ratings[id].note || "" : "",
+          })),
+          did: d.did, enjoyed: d.enjoyed, tricky: d.tricky,
+        });
+        this._clearDraft(d.date);
+        this.S.jDrafts[d.date] = this._draftFromEntry(d.date, res.entry);
+        this.S.jd = this.S.jDrafts[d.date];
+        this.S.jSaved = res;
+        this.S.jview = "saved";
+        await this._refreshJournal();
+        this._sound("finish");
+        this._render();
+        this._burstConfetti(res.xp_gained ? 140 : 60);
+      } catch (err) {
+        this.S.jMsg = (err && err.message) || "Couldn't save — try again in a moment.";
+        this._render();
+      } finally {
+        this.S.busy = false;
+      }
+    }
+
+    async _jReview(date, reaction) {
+      if (this.S.busy) return;
+      const comment = (this.S.jComments[date] || "").trim();
+      if (!reaction && !comment) return;
+      this.S.busy = true;
+      try {
+        await this._ws({
+          type: "learning_games/journal/review",
+          profile_id: this.S.profile.profile_id,
+          date, comment, ...(reaction ? { reaction } : {}),
+        });
+        delete this.S.jComments[date];
+        await this._refreshJournal();
+        this._sound("correct");
+      } catch (err) {
+        this.S.jMsg = (err && err.message) || "Couldn't send that.";
+      } finally {
+        this.S.busy = false;
+        this._render();
+      }
+    }
+
+    async _jMarkSeen() {
+      try {
+        await this._ws({
+          type: "learning_games/journal/mark_seen",
+          profile_id: this.S.profile.profile_id,
+        });
+      } catch (err) { /* fine */ }
+      await this._refreshJournal();
+      if (this.S.stats && this.S.stats.journal) this.S.stats.journal.unseen_reviews = [];
+      this._render();
+    }
+
+    async _jSubjectUpdate(id, changes) {
+      if (this.S.busy) return;
+      this.S.busy = true;
+      try {
+        await this._ws({
+          type: "learning_games/journal/update_subject",
+          profile_id: this.S.profile.profile_id,
+          subject_id: id, ...changes,
+        });
+        delete this.S.jRename[id];
+        await this._refreshJournal();
+        this.S.jMsg = null;
+      } catch (err) {
+        this.S.jMsg = (err && err.message) || "Couldn't update that subject.";
+      } finally {
+        this.S.busy = false;
+        this._render();
+      }
+    }
+
+    async _jMerge(src) {
+      const dst = this.S.jMergeSel[src];
+      if (!dst || this.S.busy) return;
+      const subjects = this.S.journal.subjects;
+      const a = subjects.find((s) => s.id === src);
+      const b = subjects.find((s) => s.id === dst);
+      if (!window.confirm(`Merge "${a.name}" into "${b.name}"? All past entries will move across.`)) return;
+      this.S.busy = true;
+      try {
+        await this._ws({
+          type: "learning_games/journal/merge_subjects",
+          profile_id: this.S.profile.profile_id,
+          source_id: src, target_id: dst,
+        });
+        delete this.S.jMergeSel[src];
+        Object.values(this.S.jDrafts).forEach((dr) => {
+          dr.ticked = dr.ticked.map((id) => (id === src ? dst : id))
+            .filter((id, i, arr) => arr.indexOf(id) === i);
+        });
+        await this._refreshJournal();
+      } catch (err) {
+        this.S.jMsg = (err && err.message) || "Couldn't merge those subjects.";
+      } finally {
+        this.S.busy = false;
+        this._render();
+      }
+    }
+
+    _jHandleAction(action, data) {
+      const d = this.S.jd;
+      switch (action) {
+        case "journal": this._sound("tap"); this._openJournal(); return true;
+        case "j-view": this._sound("tap"); this.S.jview = data.view; this.S.jMsg = null; this._render(); return true;
+        case "j-day": {
+          this._sound("tap");
+          this._openJournal(data.date, "write");
+          return true;
+        }
+        case "j-edit": this._sound("tap"); this._openJournal(data.date, "write"); return true;
+        case "j-mood": d.mood = Number(data.v); this._persistDraft(); this._render(); return true;
+        case "j-subject": this._jToggleSubject(data.id); return true;
+        case "j-enjoy": d.ratings[data.id].enjoy = Number(data.v); this._persistDraft(); this._render(); return true;
+        case "j-diff": d.ratings[data.id].difficulty = data.v; this._persistDraft(); this._render(); return true;
+        case "j-add-open": this.S.jAdd = { name: "", emoji: "📘", similar: null, error: null }; this._render(); {
+          const el = this.shadowRoot.querySelector("[data-jaddname]");
+          if (el) el.focus();
+        } return true;
+        case "j-add-cancel": this.S.jAdd = null; this._render(); return true;
+        case "j-add-emoji": this.S.jAdd.emoji = data.v; this._render(); return true;
+        case "j-add-go": this._jAddSubject(false); return true;
+        case "j-add-force": this._jAddSubject(true); return true;
+        case "j-add-pick": {
+          this.S.jAdd = null;
+          if (!d.ticked.includes(data.id)) this._jToggleSubject(data.id);
+          else this._render();
+          return true;
+        }
+        case "j-save": this._jSave(); return true;
+        case "j-react": this._jReview(data.date, data.v); return true;
+        case "j-comment": this._jReview(data.date, null); return true;
+        case "j-seen": this._sound("tap"); this._jMarkSeen(); return true;
+        case "j-hide": this._jSubjectUpdate(data.id, { hidden: data.hidden === "1" }); return true;
+        case "j-rename": {
+          const r = this.S.jRename[data.id] || {};
+          const changes = {};
+          if (r.name && r.name.trim()) changes.name = r.name.trim();
+          if (r.emoji && r.emoji.trim()) changes.emoji = r.emoji.trim();
+          if (Object.keys(changes).length) this._jSubjectUpdate(data.id, changes);
+          return true;
+        }
+        case "j-merge": this._jMerge(data.id); return true;
+      }
+      return false;
+    }
+
+    _jInput(el) {
+      const ds = el.dataset || {};
+      if (ds.jfield && this.S.jd) { this.S.jd[ds.jfield] = el.value; this._persistDraft(); }
+      else if (ds.jnote && this.S.jd) { this.S.jd.ratings[ds.jnote].note = el.value; this._persistDraft(); }
+      else if (ds.jaddname !== undefined && this.S.jAdd) { this.S.jAdd.name = el.value; this.S.jAdd.similar = null; }
+      else if (ds.jcomment) this.S.jComments[ds.jcomment] = el.value;
+      else if (ds.jrename) {
+        const r = this.S.jRename[ds.jrename] || (this.S.jRename[ds.jrename] = {});
+        r[ds.part] = el.value;
+      } else if (ds.jmerge) this.S.jMergeSel[ds.jmerge] = el.value;
+      else return false;
+      return true;
+    }
+
+    _prettyDate(iso) {
+      const j = this.S.journal;
+      const today = j ? j.today : null;
+      if (iso === today) return "Today";
+      const [y, m, d] = iso.split("-").map(Number);
+      const dt = new Date(y, m - 1, d);
+      if (today) {
+        const [ty, tm, td] = today.split("-").map(Number);
+        const diff = Math.round((new Date(ty, tm - 1, td) - dt) / 86400000);
+        if (diff === 1) return "Yesterday";
+      }
+      return dt.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+    }
+
+    _tplJournal() {
+      const v = this.S.jview;
+      const j = this.S.journal;
+      const tabs = `<div class="jtabs">
+          ${j.is_parent ? "" : `<button class="jtab ${v === "write" ? "on" : ""}" data-action="j-view" data-view="write">✏️ Write</button>`}
+          <button class="jtab ${v === "history" ? "on" : ""}" data-action="j-view" data-view="history">📜 ${j.is_parent ? "Entries" : "My journal"}</button>
+          ${j.is_parent ? `<button class="jtab ${v === "write" ? "on" : ""}" data-action="j-view" data-view="write">✏️ Write</button>
+          <button class="jtab ${v === "subjects" ? "on" : ""}" data-action="j-view" data-view="subjects">🗂️ Subjects</button>` : ""}
+        </div>`;
+      let body = "";
+      if (v === "write") body = this._tplJournalWrite();
+      else if (v === "saved") body = this._tplJournalSaved();
+      else if (v === "subjects") body = this._tplJournalSubjects();
+      else body = this._tplJournalHistory();
+      return `
+        <div class="game-head">
+          <button class="btn tiny ghost" data-action="home">←</button>
+          <h3 class="bh">📔 ${j.is_parent ? `${esc(j.name)}'s Journal` : "My Journal"}</h3>
+          <span class="jstreak">${j.streak ? `🔥${j.streak}` : ""}</span>
+        </div>
+        ${v === "saved" ? "" : tabs}
+        ${v !== "saved" && !j.is_parent ? this._tplJournalBanner() : ""}
+        ${this.S.jMsg ? `<div class="jmsg">${esc(this.S.jMsg)}</div>` : ""}
+        ${body}`;
+    }
+
+    _tplJournalBanner() {
+      const unseen = this.S.journal.unseen_reviews || [];
+      if (!unseen.length) return "";
+      const rows = unseen.slice(0, 3).map((u) => u.reviews.slice(-2).map((r) => `
+        <div class="jrev">
+          <span class="jrev-r">${esc(r.reaction || "💬")}</span>
+          <span><b>${esc(r.user_name)}</b> · ${esc(this._prettyDate(u.date))}${r.comment ? `<br>“${esc(r.comment)}”` : ""}</span>
+        </div>`).join("")).join("");
+      return `<div class="jbanner">
+        <div class="jbanner-t">💌 You've got messages about your journal!</div>
+        ${rows}
+        <button class="btn tiny primary" data-action="j-seen">Yay! 🎉</button>
+      </div>`;
+    }
+
+    _tplJournalWrite() {
+      const j = this.S.journal;
+      const d = this.S.jd;
+      const editable = j.editable_dates.includes(d.date);
+      const dayPills = j.editable_dates.map((iso) => `
+        <button class="jpill ${iso === d.date ? "on" : ""}" data-action="j-day" data-date="${esc(iso)}">
+          ${esc(this._prettyDate(iso))}${j.recent.some((e) => e.date === iso) ? " ✓" : ""}
+        </button>`).join("");
+      if (!editable) {
+        return `<div class="jday">${dayPills}</div>
+          <p class="stats-empty">That day is locked — you can write about today or the last two days.</p>`;
+      }
+      const moods = MOODS.map((m, i) => `
+        <button class="jface ${d.mood === i + 1 ? "on" : ""}" data-action="j-mood" data-v="${i + 1}" title="${m[1]}">${m[0]}</button>`).join("");
+      const byId = Object.fromEntries(j.subjects.map((s) => [s.id, s]));
+      const chips = j.subjects.filter((s) => !s.hidden || d.ticked.includes(s.id)).map((s) => `
+        <button class="jchip ${d.ticked.includes(s.id) ? "on" : ""}" data-action="j-subject" data-id="${esc(s.id)}">
+          <span>${esc(s.emoji)}</span> ${esc(s.name)}${d.ticked.includes(s.id) ? " ✓" : ""}
+        </button>`).join("");
+      const ratings = d.ticked.filter((id) => byId[id]).map((id) => {
+        const s = byId[id];
+        const r = d.ratings[id] || {};
+        return `<div class="jrate">
+          <div class="jrate-h">${esc(s.emoji)} <b>${esc(s.name)}</b></div>
+          <div class="jrate-row"><span class="jrate-l">Did you enjoy it?</span>
+            <div class="jfaces small">${ENJOY.map((f, i) => `
+              <button class="jface ${r.enjoy === i + 1 ? "on" : ""}" data-action="j-enjoy" data-id="${esc(id)}" data-v="${i + 1}" title="${f[1]}">${f[0]}</button>`).join("")}</div>
+          </div>
+          <div class="jrate-row"><span class="jrate-l">How hard was it?</span>
+            <div class="jdiffs">${DIFFS.map(([key, emoji, label]) => `
+              <button class="jdiff ${r.difficulty === key ? "on " + key : ""}" data-action="j-diff" data-id="${esc(id)}" data-v="${key}">${emoji} ${label}</button>`).join("")}</div>
+          </div>
+          <input class="jinput" data-jnote="${esc(id)}" maxlength="140" placeholder="What did you do? (optional)" value="${esc(r.note || "")}">
+        </div>`;
+      }).join("");
+      const existing = j.recent.find((e) => e.date === d.date);
+      const firstToday = d.date === j.today && !existing;
+      return `
+        <div class="jday">${dayPills}</div>
+        <div class="subject-label">How was your day?</div>
+        <div class="jfaces">${moods}</div>
+        <div class="subject-label">What did you learn${d.date === j.today ? " today" : ""}?</div>
+        <div class="jchips">
+          ${chips}
+          <button class="jchip add" data-action="j-add-open">＋ New subject</button>
+        </div>
+        ${this.S.jAdd ? this._tplJournalAdd() : ""}
+        ${ratings ? `<div class="jrates">${ratings}</div>` : ""}
+        <div class="subject-label">Tell your journal…</div>
+        ${PROMPTS.map(([key, label, ph]) => `
+          <label class="jq"><span>${label}</span>
+            <textarea class="jtext" data-jfield="${key}" maxlength="500" rows="2" placeholder="${esc(ph)}">${esc(d[key] || "")}</textarea>
+          </label>`).join("")}
+        <button class="btn primary wide" data-action="j-save">
+          ${existing ? "💾 Update my journal" : "📔 Save my journal"}${firstToday ? ` <small>(+${j.xp_per_entry} XP)</small>` : ""}
+        </button>
+        ${existing && existing.reviews.length ? `<div class="subject-label">Messages</div>${this._tplReviews(existing)}` : ""}`;
+    }
+
+    _tplJournalAdd() {
+      const a = this.S.jAdd;
+      const existing = this.S.journal.subjects;
+      if (a.similar && a.similar.length) {
+        return `<div class="jadd">
+          <div class="jadd-t">🤔 Did you mean…</div>
+          <div class="jchips">${a.similar.map((s) => `
+            <button class="jchip on" data-action="j-add-pick" data-id="${esc(s.id)}">${esc(s.emoji)} ${esc(s.name)}</button>`).join("")}</div>
+          <div class="jadd-row">
+            <button class="btn tiny ghost" data-action="j-add-force">No, add “${esc(a.name.trim())}”</button>
+            <button class="btn tiny ghost" data-action="j-add-cancel">Cancel</button>
+          </div>
+        </div>`;
+      }
+      return `<div class="jadd">
+        <div class="jadd-t">Add a new subject</div>
+        <p class="jadd-hint">Check it's not already here: ${existing.map((s) => esc(s.name)).join(", ")}</p>
+        <input class="jinput" data-jaddname maxlength="30" placeholder="e.g. Piano" value="${esc(a.name || "")}">
+        <div class="jemojis">${SUBJECT_EMOJIS.map((e) => `
+          <button class="jemoji ${a.emoji === e ? "on" : ""}" data-action="j-add-emoji" data-v="${e}">${e}</button>`).join("")}</div>
+        ${a.error ? `<div class="jmsg">${esc(a.error)}</div>` : ""}
+        <div class="jadd-row">
+          <button class="btn tiny primary" data-action="j-add-go">Add ${esc(a.emoji || "")}</button>
+          <button class="btn tiny ghost" data-action="j-add-cancel">Cancel</button>
+        </div>
+      </div>`;
+    }
+
+    _tplJournalSaved() {
+      const r = this.S.jSaved;
+      return `<div class="center results" style="min-height:360px">
+        ${r.level_up ? `<div class="levelup">⬆️ LEVEL ${r.new_level}! ⬆️</div>` : ""}
+        <div class="bigmoji">📔✨</div>
+        <h2>${r.is_update ? "Journal updated!" : "Journal saved!"}</h2>
+        ${r.xp_gained ? `<div class="xp-gain">+${r.xp_gained} XP</div>` : ""}
+        <p class="errmsg">${this.S.journal.parents_configured ? "Mum and Dad will get a message so they can read it 💌" : "Great reflecting!"}</p>
+        ${(r.new_badges || []).map((b) => `
+          <div class="badge-pop">
+            <span class="bicon">${b.icon}</span>
+            <span><b>${esc(b.name)}</b><br><small>${esc(b.desc)}</small></span>
+          </div>`).join("")}
+        <div class="result-actions">
+          <button class="btn primary" data-action="j-view" data-view="history">📜 My journal</button>
+          <button class="btn ghost" data-action="home">Home</button>
+        </div>
+      </div>`;
+    }
+
+    _tplReviews(entry) {
+      if (!entry.reviews || !entry.reviews.length) return "";
+      return `<div class="jrevs">${entry.reviews.map((r) => `
+        <div class="jrev">
+          <span class="jrev-r">${esc(r.reaction || "💬")}</span>
+          <span><b>${esc(r.user_name)}</b>${r.comment ? ` — ${esc(r.comment)}` : ""}</span>
+        </div>`).join("")}</div>`;
+    }
+
+    _tplSubjectStats(stats) {
+      if (!stats || !stats.length) return "";
+      return `<div class="jstats">${stats.map((s) => {
+        const total = s.easy + s.ok + s.tricky;
+        const w = (n) => (total ? Math.round((n / total) * 100) : 0);
+        const face = s.avg_enjoy ? ENJOY[Math.min(4, Math.max(0, Math.round(s.avg_enjoy) - 1))][0] : "·";
+        const trend = s.trend === "up" ? "📈" : s.trend === "down" ? "📉" : "";
+        return `<div class="jstat">
+          <span class="jstat-n">${esc(s.emoji)} ${esc(s.name)}</span>
+          <span class="jstat-c">${s.count}×</span>
+          <span class="jstat-f" title="Average enjoyment ${s.avg_enjoy ?? "—"}">${face}${trend}</span>
+          <div class="jdbar" title="Easy ${s.easy} · OK ${s.ok} · Tricky ${s.tricky}">
+            ${total ? `<span class="easy" style="width:${w(s.easy)}%"></span><span class="ok" style="width:${w(s.ok)}%"></span><span class="tricky" style="width:${w(s.tricky)}%"></span>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+      <div class="jlegend"><span class="easy"></span>Easy <span class="ok"></span>OK <span class="tricky"></span>Tricky</div>
+      </div>`;
+    }
+
+    _tplJournalHistory() {
+      const j = this.S.journal;
+      if (!j.recent.length) {
+        return `<p class="stats-empty">No journal entries yet.${j.is_parent ? "" : " Tap ✏️ Write to add your first one!"}</p>`;
+      }
+      const entries = j.recent.map((e) => {
+        const mood = e.mood ? MOODS[e.mood - 1][0] : "";
+        const subj = e.subjects.map((s) => `
+          <span class="jtag">${esc(s.emoji)} ${esc(s.name)}${s.enjoy ? ` ${ENJOY[s.enjoy - 1][0]}` : ""}${s.difficulty ? ` · ${DIFF_LABEL[s.difficulty]}` : ""}</span>`).join("");
+        const notes = e.subjects.filter((s) => s.note).map((s) => `
+          <div class="jnote"><b>${esc(s.name)}:</b> ${esc(s.note)}</div>`).join("");
+        const text = j.is_parent
+          ? PROMPTS.filter(([key]) => e[key]).map(([key, label]) => `
+              <div class="jfull"><span class="jfull-l">${label}</span>${esc(e[key])}</div>`).join("")
+          : (e.snippet ? `<div class="jsnip">${esc(e.snippet)}</div>` : "");
+        const canEdit = !j.is_parent && j.editable_dates.includes(e.date);
+        const parentTools = j.is_parent ? `
+          <div class="jreact">${j.reactions.map((r) => `
+            <button class="jemoji" data-action="j-react" data-date="${esc(e.date)}" data-v="${r}">${r}</button>`).join("")}</div>
+          <div class="jadd-row">
+            <input class="jinput" data-jcomment="${esc(e.date)}" maxlength="300" placeholder="Write ${esc(j.name)} a note…" value="${esc(this.S.jComments[e.date] || "")}">
+            <button class="btn tiny primary" data-action="j-comment" data-date="${esc(e.date)}">Send</button>
+          </div>` : "";
+        return `<div class="jentry ${this.S.jFocus === e.date ? "focus" : ""}" id="jentry-${esc(e.date)}">
+          <div class="jentry-h">
+            <b>${esc(this._prettyDate(e.date))}</b> <span class="jmood">${mood}</span>
+            ${canEdit ? `<button class="btn tiny ghost" data-action="j-edit" data-date="${esc(e.date)}">✏️ Edit</button>` : ""}
+          </div>
+          <div class="jtags">${subj}</div>
+          ${notes}${text}
+          ${this._tplReviews(e)}
+          ${parentTools}
+        </div>`;
+      }).join("");
+      return `
+        ${j.stats.length ? `<div class="subject-label">${j.is_parent ? "Subjects so far" : "My subjects"}</div>${this._tplSubjectStats(j.stats)}` : ""}
+        <div class="subject-label">${j.is_parent ? "Entries" : "Recent entries"}</div>
+        <div class="jentries">${entries}</div>`;
+    }
+
+    _tplJournalSubjects() {
+      const j = this.S.journal;
+      const visible = j.subjects.filter((s) => !s.hidden);
+      return `<p class="jadd-hint">Rename, hide or merge subjects to keep ${esc(j.name)}'s list tidy. Merging moves every past entry across.</p>
+        <div class="jsubs">${j.subjects.map((s) => {
+          const r = this.S.jRename[s.id] || {};
+          return `<div class="jsub ${s.hidden ? "hidden" : ""}">
+            <div class="jsub-h"><b>${esc(s.emoji)} ${esc(s.name)}</b> <small>${s.count}× ${s.hidden ? "· hidden" : ""}</small></div>
+            <div class="jadd-row">
+              <input class="jinput emoji" data-jrename="${esc(s.id)}" data-part="emoji" maxlength="8" placeholder="${esc(s.emoji)}" value="${esc(r.emoji || "")}">
+              <input class="jinput" data-jrename="${esc(s.id)}" data-part="name" maxlength="30" placeholder="${esc(s.name)}" value="${esc(r.name || "")}">
+              <button class="btn tiny ghost" data-action="j-rename" data-id="${esc(s.id)}">Save</button>
+              <button class="btn tiny ghost" data-action="j-hide" data-id="${esc(s.id)}" data-hidden="${s.hidden ? "0" : "1"}">${s.hidden ? "Show" : "Hide"}</button>
+            </div>
+            <div class="jadd-row">
+              <select class="jinput" data-jmerge="${esc(s.id)}">
+                <option value="">Merge into…</option>
+                ${visible.filter((o) => o.id !== s.id).map((o) => `
+                  <option value="${esc(o.id)}" ${this.S.jMergeSel[s.id] === o.id ? "selected" : ""}>${esc(o.emoji)} ${esc(o.name)}</option>`).join("")}
+              </select>
+              <button class="btn tiny ghost" data-action="j-merge" data-id="${esc(s.id)}">Merge</button>
+            </div>
+          </div>`;
+        }).join("")}</div>`;
     }
   }
 
@@ -1577,6 +2195,83 @@
       border-radius: 16px; padding: 12px 30px; font-size: 19px;
       box-shadow: 0 4px 0 #d9a33f; }
     .ao-quit { margin-top: 14px; }
+
+    /* ---- learning journal ---- */
+    .jhome-btn { margin-top: 10px; }
+    .jdone { font-size: 14px; color: #00916f; margin-left: 6px; }
+    .jtabs { display: flex; gap: 8px; margin: 6px 0 4px; flex-wrap: wrap; }
+    .jtab { flex: 1; background: #fff; border-radius: 14px; padding: 10px; font-size: 16px;
+      font-weight: 700; box-shadow: 0 3px 0 #eadcf0; color: #6C5CE7; }
+    .jtab.on { background: #6C5CE7; color: #fff; box-shadow: 0 3px 0 #4f41b8; }
+    .jstreak { font-weight: 800; min-width: 40px; text-align: right; }
+    .jmsg { background: #FFE8E8; color: #c0392b; border-radius: 14px; padding: 10px 14px;
+      margin: 8px 0; font-weight: 700; }
+    .jbanner { display: block; width: 100%; text-align: left; background: #FFF3C4; border-radius: 18px;
+      padding: 12px 14px; margin: 10px 0; box-shadow: 0 3px 0 #f0d77a; font-size: 16px; }
+    .jbanner-t { font-weight: 800; margin-bottom: 6px; }
+    .jbanner .btn { margin-top: 8px; }
+    .jday, .jchips, .jfaces, .jdiffs, .jemojis, .jreact, .jtags { display: flex; flex-wrap: wrap; gap: 8px; }
+    .jday { margin: 10px 0; }
+    .jpill { background: #fff; border-radius: 999px; padding: 8px 16px; font-size: 16px; font-weight: 700;
+      box-shadow: 0 3px 0 #eadcf0; }
+    .jpill.on { background: #FDCB6E; box-shadow: 0 3px 0 #d9a33f; }
+    .jface { background: #fff; border-radius: 50%; width: 54px; height: 54px; font-size: 30px;
+      box-shadow: 0 3px 0 #eadcf0; padding: 0; }
+    .jfaces.small .jface { width: 44px; height: 44px; font-size: 24px; }
+    .jface.on { background: #FDCB6E; box-shadow: 0 3px 0 #d9a33f; transform: scale(1.08); }
+    .jchip { background: #fff; border-radius: 16px; padding: 10px 14px; font-size: 16px; font-weight: 700;
+      box-shadow: 0 3px 0 #eadcf0; }
+    .jchip.on { background: #00B894; color: #fff; box-shadow: 0 3px 0 #00916f; }
+    .jchip.add { background: #EDEBFC; color: #6C5CE7; }
+    .jadd, .jrate, .jentry, .jsub { background: #fff; border-radius: 18px; padding: 12px 14px;
+      margin: 10px 0; box-shadow: 0 3px 0 #eadcf0; }
+    .jadd-t { font-weight: 800; margin-bottom: 6px; }
+    .jadd-hint { font-size: 14px; opacity: 0.75; margin: 4px 0 8px; }
+    .jadd-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+    .jadd-row .jinput { flex: 1; min-width: 120px; }
+    .jemoji { background: #F5F3FF; border-radius: 12px; width: 44px; height: 44px; font-size: 22px; padding: 0; }
+    .jemoji.on { background: #FDCB6E; }
+    .jemojis { margin-top: 8px; }
+    .jrates { margin-top: 4px; }
+    .jrate-h { font-size: 18px; margin-bottom: 6px; }
+    .jrate-row { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      flex-wrap: wrap; margin: 6px 0; }
+    .jrate-l { font-size: 15px; font-weight: 700; opacity: 0.8; }
+    .jdiff { background: #F5F3FF; border-radius: 12px; padding: 8px 12px; font-size: 15px; font-weight: 700; }
+    .jdiff.on.easy { background: #C8F7E1; } .jdiff.on.ok { background: #FFF0B3; } .jdiff.on.tricky { background: #FFD0D0; }
+    .jinput, .jtext { font-family: inherit; font-size: 17px; color: #2D3436; background: #FFFDF8;
+      border: 2px solid #eadcf0; border-radius: 14px; padding: 10px 12px; box-sizing: border-box;
+      width: 100%; color-scheme: light; }
+    .jinput.emoji { flex: 0 0 64px; min-width: 64px; text-align: center; }
+    .jinput:focus, .jtext:focus { outline: none; border-color: #6C5CE7; }
+    .jtext { resize: vertical; min-height: 64px; }
+    .jq { display: block; margin: 8px 0; }
+    .jq > span { display: block; font-weight: 800; margin-bottom: 4px; }
+    .jentry.focus { box-shadow: 0 0 0 3px #6C5CE7; }
+    .jentry-h { display: flex; align-items: center; gap: 8px; font-size: 18px; margin-bottom: 6px; }
+    .jentry-h .btn { margin-left: auto; }
+    .jmood { font-size: 22px; }
+    .jtag { background: #F5F3FF; border-radius: 10px; padding: 4px 10px; font-size: 14px; }
+    .jnote, .jsnip, .jfull { font-size: 15px; margin-top: 6px; }
+    .jfull-l { display: block; font-weight: 800; font-size: 13px; opacity: 0.7; }
+    .jrevs { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .jrev { display: flex; gap: 8px; align-items: flex-start; background: #FFF7E6; border-radius: 12px;
+      padding: 6px 10px; font-size: 15px; }
+    .jrev-r { font-size: 22px; }
+    .jreact { margin-top: 10px; }
+    .jstats { background: #fff; border-radius: 18px; padding: 10px 14px; box-shadow: 0 3px 0 #eadcf0; }
+    .jstat { display: grid; grid-template-columns: minmax(0, 1fr) 40px 52px 90px; gap: 8px;
+      align-items: center; padding: 5px 0; font-size: 15px; }
+    .jstat-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+    .jstat-c { text-align: right; opacity: 0.75; }
+    .jstat-f { font-size: 20px; }
+    .jdbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: #F0EEF8; }
+    .jdbar span, .jlegend span { display: inline-block; height: 100%; }
+    .easy { background: #55EFC4; } .ok { background: #FDCB6E; } .tricky { background: #FF7675; }
+    .jlegend { font-size: 12px; opacity: 0.75; margin-top: 6px; display: flex; gap: 6px; align-items: center; }
+    .jlegend span { width: 12px; height: 12px; border-radius: 3px; }
+    .jsub.hidden { opacity: 0.6; }
+    .jsub-h small { opacity: 0.7; }
 
     @media (min-width: 700px) {
       .mode-grid { grid-template-columns: repeat(4, 1fr); }
