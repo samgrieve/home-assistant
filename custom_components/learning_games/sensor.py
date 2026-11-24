@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import ProfileCoordinator, level_progress
 from .engine import challenges
+from .engine import daily as daily_challenges
 from .engine.badges import badge_public
 from .entity import LearningGamesEntity
 
@@ -111,7 +112,7 @@ SENSORS: tuple[LearningGamesSensorDescription, ...] = (
         ),
         lambda c: {
             "challenges": [
-                challenges.describe(ch)
+                challenges.describe(ch, c.data["daily"]["date"])
                 for ch in c.data["weekly"].get("challenges", [])
             ],
             "week_start": c.data["weekly"]["week_start"],
@@ -134,6 +135,16 @@ SENSORS: tuple[LearningGamesSensorDescription, ...] = (
         "journal", "Journal", "mdi:notebook-heart", None,
         lambda c: max(c.data["journal"]["entries"]) if c.data["journal"]["entries"] else None,
         lambda c: c.journal_sensor_attrs(),
+    ),
+    LearningGamesSensorDescription(
+        "daily_challenges", "Daily challenges done", "mdi:star-check", None,
+        lambda c: sum(1 for ch in c.data["daily"].get("challenges", []) if ch["done"]),
+        lambda c: {
+            "challenges": [
+                daily_challenges.describe(ch) for ch in c.data["daily"].get("challenges", [])
+            ],
+            "date": c.data["daily"]["date"],
+        },
     ),
     LearningGamesSensorDescription(
         "weekly_summary", "Weekly summary", "mdi:calendar-star", None,

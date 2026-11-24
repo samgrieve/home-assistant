@@ -55,15 +55,17 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
-- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze. One challenge each week targets a topic she most needs, chosen from her weakest topics and anything she marked as tricky in her journal: "Get 15 Fractions answers right" or "Raise Spelling by 5 points"
-- 30 badges to collect, including **Topic Master** 🎓 (any topic at the top level), **Glow Up** 🌸 (a topic that grew from under 10% to over 50%) and **Sharp Focus** 🔍 (5 Today's Focus rounds), per-skill mastery stars on every game tile
+- **⭐ 3 daily challenges**, new every day and each doable in one round. One always targets a topic she needs ("Get 5 Spelling answers right"). The others come from: a Focus round, a run of right answers, scoring 8+ in a round, writing in her journal, trying a game she hasn't played this week, speed bonuses, and Fly Snap. Each is worth +20 XP, with +30 bonus XP for all three and the 🌈 Triple Threat badge. They never count towards the daily question goal
+- **3 weekly challenges** worth +100 XP each. Complete all three for a bonus streak freeze. They're built to be a **stretch across the week**: each one counts only up to a daily cap ("Answer 150 questions (up to 45 a day)"), so one long session can't finish it. Targets scale with the daily goal and take about 3–4 separate days. The card says "Today's max reached — come back tomorrow!". One challenge each week targets a topic she most needs ("Get 25 Fractions answers right", "Raise Spelling by 10 points"), and there's a "Meet your daily goal on 4 days" challenge too
+- 31 badges to collect, including **Topic Master** 🎓 (any topic at the top level), **Glow Up** 🌸 (a topic that grew from under 10% to over 50%) and **Sharp Focus** 🔍 (5 Today's Focus rounds), per-skill mastery stars on every game tile
 - Adaptive difficulty: each of the 17 tracked skills moves up/down 5 bands automatically
 
 **For parents**
 - Sensors: level, streak, questions today, accuracy, maths/English mastery (per-skill detail in attributes), last badge, weekly summary
 - `binary_sensor.<name>_daily_goal_met` — the prime automation hook
-- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`, `learning_games_challenge_complete`, `learning_games_journal_entry`, `learning_games_journal_reviewed`
+- Events: `learning_games_daily_goal`, `learning_games_level_up`, `learning_games_badge_earned`, `learning_games_streak_milestone`, `learning_games_session_complete`, `learning_games_challenge_complete`, `learning_games_journal_entry`, `learning_games_journal_reviewed`, `learning_games_daily_challenge_complete`
 - `sensor.<name>_journal`: state is the date of the latest entry; attributes are `total_entries`, `entries_this_week`, `journal_streak`, `unreviewed_count`, `last_entry` and a per-subject summary. Journal text is never put in attributes, so it stays out of the recorder
+- `sensor.<name>_daily_challenges_done` (0–3), with today's challenges in attributes
 - `sensor.<name>_weekly_challenges_done` (0–3) with the full challenge list in attributes
 - All answers are checked server-side — no peeking at the answer in the browser
 

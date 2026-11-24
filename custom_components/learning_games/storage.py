@@ -48,6 +48,7 @@ def _default_daily(date: str) -> dict:
         "goal_met": False,
         "met_at": None,
         "modes_played": [],
+        "challenges": [],  # today's 3 daily challenges
     }
 
 
@@ -62,6 +63,7 @@ def _default_weekly(week_start: str) -> dict:
         "challenges": [],
         "mastery_start": {},   # {skill: mastery} snapshot when the week began
         "attempts_start": {},  # {skill: attempts} snapshot when the week began
+        "snapshot_partial": False,  # True if the snapshot was taken mid-week
     }
 
 

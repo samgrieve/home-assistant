@@ -1069,21 +1069,46 @@
       </button>`;
     }
 
+    _chalRow(c) {
+      const pct = Math.min(100, Math.round((c.progress / c.target) * 100));
+      let sub = "";
+      if (!c.done && c.daily_cap > 1) {
+        sub = c.capped_today
+          ? `<div class="chal-sub capped">✓ Today's max reached — come back tomorrow!</div>`
+          : `<div class="chal-sub">Today ${c.today}/${c.daily_cap}</div>`;
+      } else if (!c.done && c.daily_cap === 1 && c.capped_today) {
+        sub = `<div class="chal-sub capped">✓ Done for today — come back tomorrow!</div>`;
+      }
+      return `<div class="chal ${c.done ? "done" : ""}">
+        <span class="chal-icon">${c.icon}</span>
+        <div class="chal-mid">
+          <div class="chal-desc">${esc(c.desc)}</div>
+          <div class="bar small"><div class="fill" style="width:${pct}%"></div></div>
+          ${sub}
+        </div>
+        <span class="chal-state">${c.done ? "✅" : `${c.progress}/${c.target}`}</span>
+      </div>`;
+    }
+
     _tplChallengesSection(s) {
-      if (!s.challenges || !s.challenges.length) return "";
-      const row = (c) => {
-        const pct = Math.min(100, Math.round((c.progress / c.target) * 100));
-        return `<div class="chal ${c.done ? "done" : ""}">
-          <span class="chal-icon">${c.icon}</span>
-          <div class="chal-mid">
-            <div class="chal-desc">${esc(c.desc)}</div>
-            <div class="bar small"><div class="fill" style="width:${pct}%"></div></div>
-          </div>
-          <span class="chal-state">${c.done ? "✅" : `${c.progress}/${c.target}`}</span>
-        </div>`;
-      };
-      return `<div class="subject-label">This week's challenges</div>
-        <div class="chal-list">${s.challenges.map(row).join("")}</div>`;
+      let html = "";
+      const daily = s.daily_challenges || [];
+      if (daily.length) {
+        const all = daily.every((c) => c.done);
+        html += `<div class="subject-label">⭐ Today's challenges</div>
+          ${all ? `<div class="pill done-pill daily-all">🌈 All done today! +${s.daily_bonus || 30} bonus XP</div>` : ""}
+          <div class="chal-list">${daily.map((c) => this._chalRow(c)).join("")}</div>`;
+      }
+      if (s.challenges && s.challenges.length) {
+        html += `<div class="subject-label">This week's challenges</div>
+          <div class="chal-list">${s.challenges.map((c) => this._chalRow(c)).join("")}</div>`;
+      }
+      return html;
+    }
+
+    _tplDailyDone(list) {
+      return (list || []).map((d) => `
+        <div class="pill up-pill daily-pill">✅ ${esc(d.desc)} <b>+${d.xp} XP</b>${d.all_done ? " 🌈" : ""}</div>`).join("");
     }
 
     _tplGame() {
@@ -1206,6 +1231,7 @@
           <div class="result-stars">${"⭐".repeat(stars)}</div>
           <div class="xp-gain">+${r.xp_gained} XP</div>
           ${r.daily_goal_met ? `<div class="pill done-pill">🏁 Daily goal done!</div>` : ""}
+          ${this._tplDailyDone(r.daily_done)}
           ${(r.new_badges || []).map((b) => `
             <div class="badge-pop">
               <span class="bicon">${b.icon}</span>
@@ -1433,6 +1459,7 @@
           <div class="xp-gain">+${server.xp_gained || 0} XP</div>
           <div class="pill up-pill">Rounds survived: ${r.roundsCompleted} / 6</div>
           ${server.daily_goal_met ? `<div class="pill done-pill">🏁 Daily goal done!</div>` : ""}
+          ${this._tplDailyDone(server.daily_done)}
           ${(server.new_badges || []).map((b) => `
             <div class="badge-pop">
               <span class="bicon">${b.icon}</span>
@@ -1924,6 +1951,7 @@
         <h2>${r.is_update ? "Journal updated!" : "Journal saved!"}</h2>
         ${r.xp_gained ? `<div class="xp-gain">+${r.xp_gained} XP</div>` : ""}
         <p class="errmsg">${this.S.journal.parents_configured ? "Mum and Dad will get a message so they can read it 💌" : "Great reflecting!"}</p>
+        ${this._tplDailyDone(r.daily_done)}
         ${(r.new_badges || []).map((b) => `
           <div class="badge-pop">
             <span class="bicon">${b.icon}</span>
@@ -2338,6 +2366,12 @@
     .wk { background: #fff; border-radius: 18px; padding: 10px 14px; margin-top: 10px;
       box-shadow: 0 3px 0 #eadcf0; font-size: 15px; display: flex; flex-direction: column; gap: 6px; }
     .wk:empty { display: none; }
+
+    /* ---- daily challenges ---- */
+    .chal-sub { font-size: 12px; opacity: 0.75; margin-top: 3px; }
+    .chal-sub.capped { color: #00916f; opacity: 1; font-weight: 700; }
+    .daily-all { display: block; text-align: center; margin-bottom: 6px; }
+    .daily-pill b { margin-left: 4px; }
 
     /* ---- mastery grid ---- */
     .mg-group { font-size: 14px; font-weight: 800; margin: 8px 0 6px; }
