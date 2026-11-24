@@ -71,6 +71,8 @@
         jComments: {},
         jRename: {},
         jMergeSel: {},
+        jLinkOpen: null,     // parent: subject whose topic links are being edited
+        focusBefore: null,   // {skill: mastery} when a Today's Focus round started
       };
       this.A = null; // live Fly Snap state — never touched by _render()
       this._onVisibility = () => {
@@ -136,6 +138,8 @@
           const params = new URLSearchParams(window.location.search);
           if (params.get("lg") === "journal") {
             await this._openJournal(params.get("date") || null);
+          } else if (params.get("lg") === "stats") {
+            await this._showStats();
           } else {
             await this._goHome();
           }
@@ -178,6 +182,12 @@
         });
         this.S.session = { session_id: res.session_id, total: res.total };
         this.S.mode = modeId;
+        this.S.focusBefore = null;
+        if (modeId === "todays_focus" && this.S.stats) {
+          this.S.focusBefore = Object.fromEntries(
+            (this.S.stats.focus || []).map((f) => [f.skill, this.S.stats.skills[f.skill] ? this.S.stats.skills[f.skill].mastery : 0])
+          );
+        }
         this.S.screen = "game";
         this.S.bossHits = 0;
         this._setQuestion(res.question);
@@ -247,6 +257,7 @@
           this.S.results = res.results;
           this.S.screen = "results";
           this._render();
+          if (this.S.focusBefore) this._loadFocusDeltas();
           this._sound(res.results.level_up ? "levelup" : "finish");
           if (res.results.level_up || res.results.correct === res.results.total) {
             this._burstConfetti(160);
@@ -281,6 +292,22 @@
       } catch (err) {
         this._setError("Couldn't load badges right now.");
       }
+    }
+
+    async _loadFocusDeltas() {
+      try {
+        const stats = await this._ws({
+          type: "learning_games/get_stats",
+          profile_id: this.S.profile.profile_id,
+        });
+        const before = this.S.focusBefore || {};
+        this.S.results.focus_deltas = Object.keys(before).map((skill) => ({
+          skill,
+          delta: (stats.skills[skill] ? stats.skills[skill].mastery : 0) - before[skill],
+        }));
+        this.S.stats = stats;
+        if (this.S.screen === "results") this._render();
+      } catch (err) { /* deltas are a nice-to-have */ }
     }
 
     async _showStats() {
@@ -964,6 +991,13 @@
       const maths = modes.filter(([, m]) => m.subject === "maths");
       const english = modes.filter(([, m]) => m.subject === "english");
       const challenge = modes.filter(([, m]) => m.subject === "challenge");
+      const focusLine = () => {
+        const f = (s.focus || [])[0];
+        if (!f) return "practise your tricky bits";
+        if (f.reason === "tricky") return `${f.name} — you said it was tricky`;
+        if (f.reason === "new") return `${f.name} — not tried yet`;
+        return `${f.name} — let's level it up`;
+      };
       const tile = ([id, m]) => {
         const mastery = Math.round(
           m.skills.reduce((acc, sk) => acc + (s.skills[sk] ? s.skills[sk].mastery : 0), 0) /
@@ -975,7 +1009,9 @@
             style="background:linear-gradient(135deg,${c1},${c2})">
           <span class="memoji">${m.emoji}</span>
           <span class="mname">${esc(m.name)}</span>
-          <span class="mstars">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</span>
+          ${id === "todays_focus"
+            ? `<span class="mfocus">${esc(focusLine())}</span>`
+            : `<span class="mstars">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</span>`}
         </button>`;
       };
       return `
@@ -984,7 +1020,7 @@
             <span class="avatar big">${AVATARS[s.avatar] || "🙂"}</span>
             <div>
               <div class="hname">${esc(s.name)}</div>
-              <div class="hsub">🔥 ${s.streak.current} day streak${s.streak.freezes ? ` · ❄️×${s.streak.freezes}` : ""}</div>
+              <div class="hsub">🔥 ${s.streak.current} day streak${s.streak.freezes ? ` · ❄️×${s.streak.freezes}` : ""}${s.school_year ? ` · 🎒 Year ${s.school_year}` : ""}</div>
             </div>
           </div>
           <div class="ring" style="--p:${ringPct}">
@@ -1175,6 +1211,11 @@
               <span class="bicon">${b.icon}</span>
               <span><b>${esc(b.name)}</b><br><small>${esc(b.desc)}</small></span>
             </div>`).join("")}
+          ${r.mode === "todays_focus" ? `<div class="pill up-pill">🎯 Focus: ${
+            r.focus_deltas
+              ? r.focus_deltas.map((d) => `${esc(prettySkill(d.skill))} ${d.delta > 0 ? `+${d.delta}%` : d.delta < 0 ? `${d.delta}%` : "±0"}`).join(" · ")
+              : (this.S.stats && this.S.stats.focus || []).map((f) => esc(f.name)).join(" · ")
+          }</div>` : ""}
           ${(r.skill_changes || []).filter((c) => c.new_band > c.old_band).map((c) => `
             <div class="pill up-pill">📈 ${esc(prettySkill(c.skill))} → level ${c.new_band}</div>`).join("")}
           <div class="result-actions">
@@ -1242,6 +1283,7 @@
               <span class="stat-label">${esc(c.label)}</span>
             </div>`).join("")}
         </div>
+        ${st.week ? this._tplWeek(st.week) : ""}
         <div class="subject-label">Last ${st.window_days} days</div>
         ${this._tplHeatmap(st)}
         ${areas}
@@ -1249,6 +1291,36 @@
           <div class="subject-label">📔 Journal subjects</div>
           ${this._tplSubjectStats(st.journal_stats)}` : ""}
       `;
+    }
+
+    _tplWeek(w) {
+      const vs = w.vs_last_week;
+      const cells = [
+        { icon: "✏️", label: "Questions", value: w.questions,
+          sub: vs == null ? "" : vs > 0 ? `⬆️ ${vs} vs last wk` : vs < 0 ? `⬇️ ${-vs} vs last wk` : "same as last wk" },
+        { icon: "🎯", label: "Accuracy", value: w.accuracy == null ? "—" : `${w.accuracy}%` },
+        { icon: "📅", label: "Days played", value: `${w.active_days}/7`, sub: `goal met ${w.goal_days}` },
+        { icon: "⭐", label: "XP earned", value: w.xp },
+        { icon: "🔥", label: "Streak", value: `${w.streak}d`, sub: `best ${w.best_streak}d` },
+        { icon: "📔", label: "Journal", value: w.journal.entries, sub: w.journal.reviewed ? `${w.journal.reviewed} replied to` : "" },
+      ];
+      const list = (title, items) => items.length
+        ? `<div class="wk-row"><b>${title}</b> ${items.map((x) => esc(x)).join(" · ")}</div>` : "";
+      return `<div class="subject-label">📅 This week</div>
+        <div class="stat-grid">${cells.map((c) => `
+          <div class="stat-cell">
+            <span class="stat-icon">${c.icon}</span>
+            <span class="stat-value">${esc(String(c.value))}</span>
+            <span class="stat-label">${esc(c.label)}</span>
+            ${c.sub ? `<span class="stat-sub">${esc(c.sub)}</span>` : ""}
+          </div>`).join("")}</div>
+        <div class="wk">
+          ${list("📈 Improved:", w.improved.map((i) => `${i.name} +${i.gain}`))}
+          ${list("🌱 Focus next:", w.needs_work.map((n) => n.name))}
+          ${list("🏅 Badges:", w.badges)}
+          ${w.journal.favourite ? `<div class="wk-row"><b>😍 Loved:</b> ${esc(w.journal.favourite)}</div>` : ""}
+          ${w.journal.trickiest ? `<div class="wk-row"><b>🧗 Tricky:</b> ${esc(w.journal.trickiest)}${w.journal.tricky_topics.length ? ` (${esc(w.journal.tricky_topics.join(", "))})` : ""}</div>` : ""}
+        </div>`;
     }
 
     _tplHeatmap(st) {
@@ -1360,7 +1432,7 @@
         d.tricky = entry.tricky || "";
         for (const s of entry.subjects) {
           d.ticked.push(s.id);
-          d.ratings[s.id] = { enjoy: s.enjoy, difficulty: s.difficulty, note: s.note || "" };
+          d.ratings[s.id] = { enjoy: s.enjoy, difficulty: s.difficulty, note: s.note || "", topics: s.topics || [] };
         }
       }
       // An unsaved draft from before a page refresh wins over the stored entry.
@@ -1430,7 +1502,7 @@
       if (i >= 0) d.ticked.splice(i, 1);
       else {
         d.ticked.push(id);
-        if (!d.ratings[id]) d.ratings[id] = { enjoy: null, difficulty: null, note: "" };
+        if (!d.ratings[id]) d.ratings[id] = { enjoy: null, difficulty: null, note: "", topics: [] };
       }
       this._persistDraft();
       this._render();
@@ -1484,6 +1556,7 @@
             enjoy: d.ratings[id] ? d.ratings[id].enjoy : null,
             difficulty: d.ratings[id] ? d.ratings[id].difficulty : null,
             note: d.ratings[id] ? d.ratings[id].note || "" : "",
+            topics: d.ratings[id] && d.ratings[id].difficulty === "tricky" ? d.ratings[id].topics || [] : [],
           })),
           did: d.did, enjoyed: d.enjoyed, tricky: d.tricky,
         });
@@ -1601,6 +1674,24 @@
         case "j-subject": this._jToggleSubject(data.id); return true;
         case "j-enjoy": d.ratings[data.id].enjoy = Number(data.v); this._persistDraft(); this._render(); return true;
         case "j-diff": d.ratings[data.id].difficulty = data.v; this._persistDraft(); this._render(); return true;
+        case "j-topic": {
+          const r = d.ratings[data.id];
+          r.topics = r.topics || [];
+          const i = r.topics.indexOf(data.skill);
+          if (i >= 0) r.topics.splice(i, 1); else r.topics.push(data.skill);
+          this._persistDraft();
+          this._render();
+          return true;
+        }
+        case "j-link-open": this.S.jLinkOpen = this.S.jLinkOpen === data.id ? null : data.id; this._render(); return true;
+        case "j-link": {
+          const subj = this.S.journal.subjects.find((x) => x.id === data.id);
+          const skills = subj.skills.includes(data.skill)
+            ? subj.skills.filter((x) => x !== data.skill)
+            : [...subj.skills, data.skill];
+          this._jSubjectUpdate(data.id, { skills });
+          return true;
+        }
         case "j-add-open": this.S.jAdd = { name: "", emoji: "📘", similar: null, error: null }; this._render(); {
           const el = this.shadowRoot.querySelector("[data-jaddname]");
           if (el) el.focus();
@@ -1734,6 +1825,11 @@
             <div class="jdiffs">${DIFFS.map(([key, emoji, label]) => `
               <button class="jdiff ${r.difficulty === key ? "on " + key : ""}" data-action="j-diff" data-id="${esc(id)}" data-v="${key}">${emoji} ${label}</button>`).join("")}</div>
           </div>
+          ${r.difficulty === "tricky" && s.skills && s.skills.length ? `
+          <div class="jrate-row jtopics-row"><span class="jrate-l">Which bit was tricky?</span>
+            <div class="jtopics">${s.skills.map((sk) => `
+              <button class="jtopic ${(r.topics || []).includes(sk) ? "on" : ""}" data-action="j-topic" data-id="${esc(id)}" data-skill="${esc(sk)}">${esc((j.topics || {})[sk] || sk)}</button>`).join("")}</div>
+          </div>` : ""}
           <input class="jinput" data-jnote="${esc(id)}" maxlength="140" placeholder="What did you do? (optional)" value="${esc(r.note || "")}">
         </div>`;
       }).join("");
@@ -1846,7 +1942,7 @@
       const entries = j.recent.map((e) => {
         const mood = e.mood ? MOODS[e.mood - 1][0] : "";
         const subj = e.subjects.map((s) => `
-          <span class="jtag">${esc(s.emoji)} ${esc(s.name)}${s.enjoy ? ` ${ENJOY[s.enjoy - 1][0]}` : ""}${s.difficulty ? ` · ${DIFF_LABEL[s.difficulty]}` : ""}</span>`).join("");
+          <span class="jtag">${esc(s.emoji)} ${esc(s.name)}${s.enjoy ? ` ${ENJOY[s.enjoy - 1][0]}` : ""}${s.difficulty ? ` · ${DIFF_LABEL[s.difficulty]}` : ""}${(s.topics || []).length ? ` (${s.topics.map((t) => esc((j.topics || {})[t] || t)).join(", ")})` : ""}</span>`).join("");
         const notes = e.subjects.filter((s) => s.note).map((s) => `
           <div class="jnote"><b>${esc(s.name)}:</b> ${esc(s.note)}</div>`).join("");
         const text = j.is_parent
@@ -1881,7 +1977,7 @@
     _tplJournalSubjects() {
       const j = this.S.journal;
       const visible = j.subjects.filter((s) => !s.hidden);
-      return `<p class="jadd-hint">Rename, hide or merge subjects to keep ${esc(j.name)}'s list tidy. Merging moves every past entry across.</p>
+      return `<p class="jadd-hint">Rename, hide or merge subjects to keep ${esc(j.name)}'s list tidy. Merging moves every past entry across. 🔗 Game topics decide which games get extra practice when ${esc(j.name)} marks a subject as tricky.</p>
         <div class="jsubs">${j.subjects.map((s) => {
           const r = this.S.jRename[s.id] || {};
           return `<div class="jsub ${s.hidden ? "hidden" : ""}">
@@ -1892,6 +1988,11 @@
               <button class="btn tiny ghost" data-action="j-rename" data-id="${esc(s.id)}">Save</button>
               <button class="btn tiny ghost" data-action="j-hide" data-id="${esc(s.id)}" data-hidden="${s.hidden ? "0" : "1"}">${s.hidden ? "Show" : "Hide"}</button>
             </div>
+            <div class="jadd-row">
+              <button class="btn tiny ghost" data-action="j-link-open" data-id="${esc(s.id)}">🔗 Game topics (${(s.skills || []).length})</button>
+            </div>
+            ${this.S.jLinkOpen === s.id ? `<div class="jtopics">${Object.entries(j.topics || {}).map(([sk, name]) => `
+              <button class="jtopic ${(s.skills || []).includes(sk) ? "on" : ""}" data-action="j-link" data-id="${esc(s.id)}" data-skill="${esc(sk)}">${esc(name)}</button>`).join("")}</div>` : ""}
             <div class="jadd-row">
               <select class="jinput" data-jmerge="${esc(s.id)}">
                 <option value="">Merge into…</option>
@@ -2195,6 +2296,17 @@
       border-radius: 16px; padding: 12px 30px; font-size: 19px;
       box-shadow: 0 4px 0 #d9a33f; }
     .ao-quit { margin-top: 14px; }
+
+    /* ---- v1.4: focus, topics, weekly ---- */
+    .mfocus { font-size: 12px; font-weight: 700; opacity: 0.95; line-height: 1.2; padding: 0 4px; }
+    .jtopics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .jrate-row.jtopics-row { align-items: flex-start; flex-direction: column; }
+    .jtopic { background: #FFF0F0; border-radius: 12px; padding: 6px 10px; font-size: 14px; font-weight: 700; }
+    .jtopic.on { background: #FF7675; color: #fff; }
+    .stat-sub { font-size: 12px; opacity: 0.7; }
+    .wk { background: #fff; border-radius: 18px; padding: 10px 14px; margin-top: 10px;
+      box-shadow: 0 3px 0 #eadcf0; font-size: 15px; display: flex; flex-direction: column; gap: 6px; }
+    .wk:empty { display: none; }
 
     /* ---- learning journal ---- */
     .jhome-btn { margin-top: 10px; }

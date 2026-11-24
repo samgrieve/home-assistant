@@ -18,6 +18,8 @@ from .const import (
     CONF_DAILY_GOAL,
     CONF_NAME,
     CONF_PARENT_USERS,
+    CONF_SCHOOL_YEAR,
+    CONF_SCHOOL_YEAR_SET_IN,
     DEFAULT_DAILY_GOAL,
     EVENT_BADGE_EARNED,
     EVENT_CHALLENGE_COMPLETE,
@@ -40,6 +42,8 @@ from .engine import (
     adaptive,
     arcade,
     challenges,
+    curriculum,
+    focus_ranking,
     journal,
 )
 from .engine.badges import badge_public, check_badges
@@ -58,6 +62,7 @@ STATS_WINDOW_DAYS = 30
 MAX_FREEZES = 2
 MAX_ACTIVE_SESSIONS = 4
 MAX_ACTIVE_ARCADES = 2
+WEEKLY_HISTORY_WEEKS = 12
 
 
 def xp_to_next(level: int) -> int:
@@ -112,6 +117,27 @@ class ProfileCoordinator:
         return bool(user_id) and user_id in self.parent_users
 
     @property
+    def school_year(self) -> int:
+        base = self.entry.options.get(CONF_SCHOOL_YEAR, curriculum.DEFAULT_YEAR)
+        set_in = self.entry.options.get(CONF_SCHOOL_YEAR_SET_IN)
+        return curriculum.current_school_year(int(base), set_in, self._today())
+
+    def _apply_starting_bands(self) -> None:
+        """Lift never-practised skills to the school year's starting band.
+
+        Never lowers a band and never touches a skill she has answered.
+        """
+        start = curriculum.starting_band(self.school_year)
+        for state in self.skills.values():
+            if state.attempts == 0 and state.band < start:
+                state.band = start
+
+    def on_options_updated(self) -> None:
+        self._apply_starting_bands()
+        self._save()
+        self._notify()
+
+    @property
     def daily_goal(self) -> int:
         return self.entry.options.get(
             CONF_DAILY_GOAL, self.entry.data.get(CONF_DAILY_GOAL, DEFAULT_DAILY_GOAL)
@@ -126,6 +152,8 @@ class ProfileCoordinator:
             skill: SkillState.from_dict(self.data["skills"].get(skill, {}))
             for skill in ALL_SKILLS
         }
+        journal.ensure_subject_skills(self.data["journal"])
+        self._apply_starting_bands()
         self._check_rollover()
         # A few seconds past midnight: roll the day over even while idle.
         self._unsub_midnight = async_track_time_change(
@@ -174,11 +202,27 @@ class ProfileCoordinator:
                 else:
                     streak["current"] = 0
             self.data["daily"] = _default_daily(today_iso)
+            self._apply_starting_bands()  # the school year may have moved up
 
         week_start = (today - timedelta(days=today.weekday())).isoformat()
         if self.data["weekly"]["week_start"] != week_start:
+            old = self.data["weekly"]
+            # Skip the placeholder bucket of a brand-new or just-upgraded profile.
+            if old.get("mastery_start") or old.get("questions"):
+                finished = self.weekly_summary(old)
+                history = self.data.setdefault("weekly_history", [])
+                history.append({k: v for k, v in finished.items()
+                                if not k.endswith(("_text", "_title"))})
+                del history[:-WEEKLY_HISTORY_WEEKS]
             self.data["weekly"] = _default_weekly(week_start)
+        if not self.data["weekly"].get("mastery_start"):
+            self._snapshot_week_start()
         self._ensure_challenges()
+
+    def _snapshot_week_start(self) -> None:
+        weekly = self.data["weekly"]
+        weekly["mastery_start"] = {s: round(st.mastery, 1) for s, st in self.skills.items()}
+        weekly["attempts_start"] = {s: st.attempts for s, st in self.skills.items()}
 
     def _ensure_challenges(self) -> None:
         weekly = self.data["weekly"]
@@ -231,6 +275,7 @@ class ProfileCoordinator:
         session = GameSession(
             session_id, mode, length, self.skills, self.banks, random.Random(),
             xp_multiplier=BOSS_XP_MULTIPLIER if mode == "boss_battle" else 1.0,
+            focus=self.journal_focus(),
         )
         self.sessions[session_id] = session
         question = session.next_question()
@@ -712,6 +757,8 @@ class ProfileCoordinator:
                 challenges.describe(c)
                 for c in self.data["weekly"].get("challenges", [])
             ],
+            "school_year": self.school_year,
+            "focus": self.focus_topics(),
             "journal": {
                 "done_today": self._today().isoformat() in self.journal["entries"],
                 "streak": journal.journal_streak(self.journal["entries"], self._today()),
@@ -802,6 +849,8 @@ class ProfileCoordinator:
             "weakest": weakest,
             "badge_count": len(self.data["badges"]),
             "journal_stats": journal.subject_stats(self.journal, today),
+            "week": self.weekly_summary(),
+            "school_year": self.school_year,
         }
 
     def badges_payload(self) -> dict:
@@ -865,6 +914,7 @@ class ProfileCoordinator:
                 "emoji": s["emoji"],
                 "hidden": s.get("hidden", False),
                 "count": stats.get(s["id"], {}).get("count", 0),
+                "skills": list(s.get("skills", [])),
             }
             for s in journal.active_subjects(self.journal, include_hidden)
         ]
@@ -906,6 +956,7 @@ class ProfileCoordinator:
             "is_parent": parent,
             "parents_configured": bool(self.parent_users),
             "reactions": list(journal.REACTIONS),
+            "topics": {skill: journal.topic_name(skill) for skill in ALL_SKILLS},
             "xp_per_entry": journal.JOURNAL_XP,
         }
 
@@ -1012,6 +1063,200 @@ class ProfileCoordinator:
             },
         )
         return self._entry_public(entry)
+
+    # ------------------------------------------------------------------ focus & weekly summary
+
+    def journal_focus(self) -> dict[str, float]:
+        return journal.journal_focus(self.journal, self._today())
+
+    def focus_topics(self, count: int = 3) -> list[dict]:
+        """Top skills Today's Focus will drill, with a kid-friendly reason."""
+        focus = self.journal_focus()
+        tricky = journal.tricky_reasons(self.journal, self._today())
+        out = []
+        for skill in focus_ranking(self.skills, focus)[:count]:
+            state = self.skills[skill]
+            if focus.get(skill, 0) > 0 and skill in tricky:
+                reason = "tricky"
+            elif state.attempts == 0:
+                reason = "new"
+            else:
+                reason = "weak"
+            out.append(
+                {
+                    "skill": skill,
+                    "name": journal.topic_name(skill),
+                    "reason": reason,
+                    "date": tricky.get(skill),
+                    "mastery": round(state.mastery),
+                }
+            )
+        return out
+
+    def weekly_summary(self, weekly: dict | None = None) -> dict:
+        """Summary of one week (default: this week so far) for parents and Lizzie."""
+        weekly = weekly or self.data["weekly"]
+        week_start = weekly["week_start"]
+        start = date.fromisoformat(week_start)
+        days = [(start + timedelta(days=i)).isoformat() for i in range(7)]
+        log = self.data.get("daily_log", {})
+        goal = self.daily_goal
+
+        questions = int(weekly.get("questions", 0))
+        correct = int(weekly.get("correct", 0))
+        active_days = sum(1 for d in days if log.get(d, {}).get("q", 0) > 0)
+        goal_days = sum(1 for d in days if log.get(d, {}).get("q", 0) >= goal)
+        xp = sum(int(log.get(d, {}).get("xp", 0)) for d in days)
+        challenges_done = sum(1 for c in weekly.get("challenges", []) if c.get("done"))
+        badges = [
+            badge_public(b, ts)["name"]
+            for b, ts in sorted(self.data["badges"].items(), key=lambda i: i[1])
+            if isinstance(ts, str) and days[0] <= ts[:10] <= days[-1]
+        ]
+        history = [h for h in self.data.get("weekly_history", []) if h["week_start"] < week_start]
+        last = history[-1] if history else None
+        vs_last = questions - last["questions"] if last else None
+
+        m_start = weekly.get("mastery_start") or {}
+        a_start = weekly.get("attempts_start") or {}
+        gains = sorted(
+            (
+                (skill, round(state.mastery - m_start[skill], 1))
+                for skill, state in self.skills.items()
+                if skill in m_start
+            ),
+            key=lambda x: -x[1],
+        )
+        improved = [
+            {"skill": s, "name": journal.topic_name(s), "gain": g} for s, g in gains if g >= 1
+        ][:3]
+        needs_work = [
+            {"skill": f["skill"], "name": f["name"], "mastery": f["mastery"]}
+            for f in self.focus_topics()
+        ]
+        not_practised = [
+            journal.topic_name(s)
+            for s, st in self.skills.items()
+            if a_start and st.attempts == a_start.get(s, st.attempts)
+        ]
+
+        jr = self.journal
+        week_entries = [jr["entries"][d] for d in days if d in jr["entries"]]
+        subj_counts: dict[str, int] = {}
+        enjoy: dict[str, list[int]] = {}
+        tricky_counts: dict[str, int] = {}
+        tricky_topics: dict[str, set[str]] = {}
+        for entry in week_entries:
+            for item in entry.get("subjects", []):
+                sid = journal.resolve(jr, item["id"])
+                name = jr["subjects"].get(sid, {}).get("name", sid)
+                subj_counts[name] = subj_counts.get(name, 0) + 1
+                if item.get("enjoy"):
+                    enjoy.setdefault(name, []).append(item["enjoy"])
+                if item.get("difficulty") == "tricky":
+                    tricky_counts[name] = tricky_counts.get(name, 0) + 1
+                    tricky_topics.setdefault(name, set()).update(
+                        journal.topic_name(t) for t in item.get("topics") or []
+                    )
+        favourite = max(enjoy, key=lambda n: (sum(enjoy[n]) / len(enjoy[n]), len(enjoy[n])),
+                        default=None)
+        if favourite and sum(enjoy[favourite]) / len(enjoy[favourite]) < 4:
+            favourite = None
+        trickiest = max(tricky_counts, key=lambda n: tricky_counts[n], default=None)
+        new_subjects = [
+            s["name"] for s in journal.active_subjects(jr, include_hidden=True)
+            if days[0] <= (s.get("created") or "")[:10] <= days[-1]
+            and s["id"] not in journal.SEED_SUBJECT_IDS
+        ]
+        reviewed = sum(1 for e in week_entries if e.get("reviews"))
+
+        summary = {
+            "week_start": week_start,
+            "school_year": self.school_year,
+            "questions": questions,
+            "accuracy": round(correct / questions * 100) if questions else None,
+            "active_days": active_days,
+            "goal_days": goal_days,
+            "xp": xp,
+            "challenges_done": challenges_done,
+            "badges": badges,
+            "streak": self.data["streak"]["current"],
+            "best_streak": self.data["streak"]["best"],
+            "vs_last_week": vs_last,
+            "improved": improved,
+            "needs_work": needs_work,
+            "not_practised": not_practised,
+            "journal": {
+                "entries": len(week_entries),
+                "subjects": dict(sorted(subj_counts.items(), key=lambda i: -i[1])),
+                "favourite": favourite,
+                "trickiest": trickiest,
+                "tricky_topics": sorted(tricky_topics.get(trickiest, set())) if trickiest else [],
+                "new_subjects": new_subjects,
+                "reviewed": reviewed,
+            },
+        }
+        summary.update(self._summary_texts(summary))
+        return summary
+
+    def _summary_texts(self, s: dict) -> dict:
+        name = self.name
+        j = s["journal"]
+        lines = []
+        if s["questions"]:
+            lines.append(
+                f"🎮 {s['questions']} questions · {s['accuracy']}% right · "
+                f"played {s['active_days']}/7 days (goal met {s['goal_days']})"
+            )
+        else:
+            lines.append("🎮 No games played this week")
+        if s["vs_last_week"]:
+            arrow = "⬆️" if s["vs_last_week"] > 0 else "⬇️"
+            lines.append(f"{arrow} {abs(s['vs_last_week'])} {'more' if s['vs_last_week'] > 0 else 'fewer'} questions than last week")
+        if s["improved"]:
+            lines.append("📈 Improved: " + ", ".join(f"{i['name']} +{i['gain']:g}" for i in s["improved"]))
+        if s["needs_work"]:
+            lines.append("🌱 Needs work: " + ", ".join(n["name"] for n in s["needs_work"]))
+        if s["badges"]:
+            lines.append("🏅 Badges: " + ", ".join(s["badges"]))
+        if j["entries"]:
+            top = ", ".join(f"{n} ×{c}" for n, c in list(j["subjects"].items())[:4])
+            jl = f"📔 Journal: {j['entries']} entr{'y' if j['entries'] == 1 else 'ies'}"
+            if top:
+                jl += f" — {top}"
+            lines.append(jl)
+            extras = []
+            if j["favourite"]:
+                extras.append(f"loved {j['favourite']}")
+            if j["trickiest"]:
+                bit = f" ({', '.join(j['tricky_topics'])})" if j["tricky_topics"] else ""
+                extras.append(f"found {j['trickiest']}{bit} tricky")
+            if extras:
+                lines.append("💭 She " + " and ".join(extras))
+        else:
+            lines.append("📔 No journal entries this week")
+        lines.append(f"🔥 Streak {s['streak']} (best {s['best_streak']}) · {curriculum.label(s['school_year'])}")
+
+        bits = []
+        if s["questions"]:
+            bits.append(f"answered {s['questions']} questions")
+        if j["entries"]:
+            bits.append(f"wrote in your journal {j['entries']} time{'s' if j['entries'] != 1 else ''}")
+        if s["badges"]:
+            bits.append(f"earned {len(s['badges'])} badge{'s' if len(s['badges']) != 1 else ''}")
+        if bits:
+            kid = "This week you " + (", ".join(bits[:-1]) + " and " + bits[-1] if len(bits) > 1 else bits[0]) + "! 🎉"
+            if s["improved"]:
+                kid += f" {s['improved'][0]['name']} went up {s['improved'][0]['gain']:g}% 🚀"
+            kid += " Have a brilliant week!"
+        else:
+            kid = "A brand new week starts tomorrow — try Today's Focus and write in your journal! 🎯📔"
+        return {
+            "parent_title": f"📊 {name}'s week: {s['questions']} questions, {j['entries']} journal entr{'y' if j['entries'] == 1 else 'ies'}",
+            "parent_text": "\n".join(lines),
+            "kid_title": f"🌟 Your week, {name}!",
+            "kid_text": kid,
+        }
 
     def mark_reviews_seen(self, entry_date: str | None) -> None:
         for iso, entry in self.journal["entries"].items():

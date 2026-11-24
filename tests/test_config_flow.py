@@ -72,7 +72,11 @@ async def test_options_flow(hass: HomeAssistant):
         result["flow_id"], {CONF_AVATAR: "dragon", CONF_DAILY_GOAL: 30}
     )
     assert result["type"] == "create_entry"
-    assert entry.options == {CONF_AVATAR: "dragon", CONF_DAILY_GOAL: 30, "parent_users": []}
+    assert entry.options[CONF_AVATAR] == "dragon"
+    assert entry.options[CONF_DAILY_GOAL] == 30
+    assert entry.options["parent_users"] == []
+    assert entry.options["school_year"] == 5  # default
+    assert isinstance(entry.options["school_year_set_in"], int)
 
 
 async def test_options_flow_parent_users(hass: HomeAssistant, hass_admin_user):

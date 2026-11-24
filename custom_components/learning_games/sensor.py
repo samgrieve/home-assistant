@@ -32,7 +32,12 @@ def _level_value(c: ProfileCoordinator):
 
 def _level_attrs(c: ProfileCoordinator):
     level, into, to_next = level_progress(c.data["xp"]["total"])
-    return {"xp_total": c.data["xp"]["total"], "xp_into_level": into, "xp_to_next": to_next}
+    return {
+        "xp_total": c.data["xp"]["total"],
+        "xp_into_level": into,
+        "xp_to_next": to_next,
+        "school_year": c.school_year,
+    }
 
 
 def _accuracy_value(c: ProfileCoordinator):
@@ -129,6 +134,11 @@ SENSORS: tuple[LearningGamesSensorDescription, ...] = (
         "journal", "Journal", "mdi:notebook-heart", None,
         lambda c: max(c.data["journal"]["entries"]) if c.data["journal"]["entries"] else None,
         lambda c: c.journal_sensor_attrs(),
+    ),
+    LearningGamesSensorDescription(
+        "weekly_summary", "Weekly summary", "mdi:calendar-star", None,
+        lambda c: c.data["weekly"]["week_start"],
+        lambda c: c.weekly_summary(),
     ),
 )
 

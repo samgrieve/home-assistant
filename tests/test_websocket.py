@@ -59,7 +59,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     assert msg["success"]
     stats = msg["result"]
     assert stats["daily"]["goal"] == 5
-    assert len(stats["modes"]) == 11
+    assert len(stats["modes"]) == 12
     assert len(stats["skills"]) == 17
     assert len(stats["challenges"]) == 3
     assert stats["arcade"]["games"] == 0
@@ -577,3 +577,85 @@ async def test_journal_review_requires_parent(
     assert (await kid.receive_json())["error"]["code"] == "not_parent"
     await parent.send_json({"id": 3, **merge})
     assert (await parent.receive_json())["success"]
+
+
+# ---------------------------------------------------------------- v1.4: focus & summary
+
+
+async def test_tricky_journal_topic_drives_todays_focus(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    j = (await client.receive_json())["result"]
+    maths = next(s for s in j["subjects"] if s["id"] == "maths")
+    assert "maths.fractions" in maths["skills"]
+    assert j["topics"]["maths.long_multiplication"] == "Long multiplication"
+
+    await client.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": j["today"],
+        "subjects": [{"id": "maths", "enjoy": 2, "difficulty": "tricky",
+                      "topics": ["maths.fractions"]}],
+    })
+    assert (await client.receive_json())["success"]
+
+    await client.send_json({"id": 3, "type": f"{DOMAIN}/get_stats", "profile_id": pid})
+    stats = (await client.receive_json())["result"]
+    assert stats["focus"][0]["skill"] == "maths.fractions"
+    assert stats["focus"][0]["reason"] == "tricky"
+    assert stats["school_year"] == 5
+    assert "todays_focus" in stats["modes"]
+
+    # A full Today's Focus round runs end to end and leans on fractions.
+    await client.send_json({"id": 4, "type": f"{DOMAIN}/start_session",
+                            "profile_id": pid, "mode": "todays_focus", "length": 10})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    session_id = msg["result"]["session_id"]
+    question = msg["result"]["question"]
+    for i in range(10):
+        await client.send_json({
+            "id": 10 + i, "type": f"{DOMAIN}/submit_answer", "profile_id": pid,
+            "session_id": session_id, "question_id": question["question_id"],
+            "answer": "0", "elapsed_ms": 4000,
+        })
+        res = (await client.receive_json())["result"]
+        question = res.get("next_question")
+    assert res["results"]["mode"] == "todays_focus"
+    assert res["results"]["total"] == 10
+
+
+async def test_weekly_summary_sensor(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    today = (await client.receive_json())["result"]["today"]
+    await client.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": today, "did": "Secret diary words",
+        "subjects": [{"id": "art", "enjoy": 5}, {"id": "maths", "difficulty": "tricky",
+                                                 "topics": ["maths.decimals"]}],
+    })
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.maya_s_learning_games_weekly_summary")
+    attrs = state.attributes
+    assert state.state == attrs["week_start"]
+    assert attrs["journal"]["entries"] == 1
+    assert attrs["journal"]["favourite"] == "Art"
+    assert attrs["journal"]["trickiest"] == "Maths"
+    assert attrs["journal"]["tricky_topics"] == ["Decimals"]
+    assert attrs["journal"]["new_subjects"] == []
+    assert "Dear Diary" in attrs["badges"]
+    assert attrs["needs_work"][0]["name"] == "Decimals"
+    assert "Maya's week" in attrs["parent_title"]
+    assert "found Maths (Decimals) tricky" in attrs["parent_text"]
+    assert "wrote in your journal 1 time" in attrs["kid_text"]
+    assert "Secret diary words" not in str(attrs)  # her writing never leaves the card
+
+    await client.send_json({"id": 3, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await client.receive_json())["result"]
+    assert st["week"]["journal"]["entries"] == 1

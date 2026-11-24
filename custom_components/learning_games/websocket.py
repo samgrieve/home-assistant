@@ -272,6 +272,9 @@ def ws_journal_get(hass, connection, msg) -> None:
                     vol.Optional("enjoy"): RATING,
                     vol.Optional("difficulty"): vol.Any(None, vol.In(DIFFICULTIES)),
                     vol.Optional("note", default=""): _short_text(MAX_NOTE),
+                    vol.Optional("topics", default=[]): vol.All(
+                        [vol.All(str, vol.Length(max=64))], vol.Length(max=20)
+                    ),
                 }
             ],
             vol.Length(max=30),
@@ -323,6 +326,7 @@ def ws_journal_add_subject(hass, connection, msg) -> None:
         vol.Optional("name"): vol.All(str, vol.Length(min=1, max=MAX_SUBJECT_NAME * 2)),
         vol.Optional("emoji"): vol.All(str, vol.Length(max=16)),
         vol.Optional("hidden"): bool,
+        vol.Optional("skills"): vol.All([vol.All(str, vol.Length(max=64))], vol.Length(max=40)),
     }
 )
 @callback
@@ -331,7 +335,7 @@ def ws_journal_update_subject(hass, connection, msg) -> None:
         return
     if not _require_parent(coordinator, connection, msg):
         return
-    changes = {k: msg[k] for k in ("name", "emoji", "hidden") if k in msg}
+    changes = {k: msg[k] for k in ("name", "emoji", "hidden", "skills") if k in msg}
     try:
         subject = coordinator.update_journal_subject(msg["subject_id"], **changes)
     except JournalError as err:

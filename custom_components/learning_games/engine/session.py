@@ -35,6 +35,7 @@ class GameSession:
         banks: WordBanks | None,
         rng: random.Random | None = None,
         xp_multiplier: float = 1.0,
+        focus: dict[str, float] | None = None,
     ) -> None:
         self.session_id = session_id
         self.mode_id = mode_id
@@ -43,6 +44,7 @@ class GameSession:
         self.banks = banks
         self.rng = rng or random.Random()
         self.xp_multiplier = xp_multiplier
+        self.focus = focus or {}
 
         self.index = 0  # 1-based index of the current question
         self.current: Question | None = None
@@ -61,7 +63,7 @@ class GameSession:
         if self.done:
             raise SessionError("session finished")
         self.index += 1
-        skill = pick_skill(self.mode_id, self.skills, self.rng)
+        skill = pick_skill(self.mode_id, self.skills, self.rng, self.focus)
         band = self.skills[skill].band
         question = None
         for _ in range(MAX_GENERATE_RETRIES):

@@ -1,7 +1,7 @@
 """Constants for the Learning Games integration."""
 
 DOMAIN = "learning_games"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 STORAGE_VERSION = 1
 STORAGE_MINOR_VERSION = 1
@@ -10,6 +10,8 @@ CONF_NAME = "name"
 CONF_AVATAR = "avatar"
 CONF_DAILY_GOAL = "daily_goal"
 CONF_PARENT_USERS = "parent_users"
+CONF_SCHOOL_YEAR = "school_year"
+CONF_SCHOOL_YEAR_SET_IN = "school_year_set_in"
 
 DEFAULT_DAILY_GOAL = 20
 
