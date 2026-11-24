@@ -23,6 +23,7 @@ from .const import (
     DEFAULT_DAILY_GOAL,
     EVENT_BADGE_EARNED,
     EVENT_CHALLENGE_COMPLETE,
+    EVENT_DAILY_CHALLENGE_COMPLETE,
     EVENT_DAILY_GOAL,
     EVENT_JOURNAL_ENTRY,
     EVENT_JOURNAL_REVIEWED,
@@ -43,6 +44,7 @@ from .engine import (
     arcade,
     challenges,
     curriculum,
+    daily as daily_challenges,
     focus_ranking,
     journal,
 )
@@ -92,6 +94,7 @@ class ProfileCoordinator:
         self.sessions: dict[str, GameSession] = {}
         self.arcades: dict[str, dict] = {}
         self._unsub_midnight = None
+        self._daily_done: list[dict] = []
 
     # ------------------------------------------------------------------ config
 
@@ -216,14 +219,66 @@ class ProfileCoordinator:
                                 if not k.endswith(("_text", "_title"))})
                 del history[:-WEEKLY_HISTORY_WEEKS]
             self.data["weekly"] = _default_weekly(week_start)
+            self._snapshot_week_start(partial=False)
         if not self.data["weekly"].get("mastery_start"):
-            self._snapshot_week_start()
+            # First load part-way through a week: she may already have played.
+            self._snapshot_week_start(partial=True)
         self._ensure_challenges()
+        self._ensure_daily_challenges()
 
-    def _snapshot_week_start(self) -> None:
+    def _snapshot_week_start(self, partial: bool) -> None:
         weekly = self.data["weekly"]
         weekly["mastery_start"] = {s: round(st.mastery, 1) for s, st in self.skills.items()}
         weekly["attempts_start"] = {s: st.attempts for s, st in self.skills.items()}
+        weekly["snapshot_partial"] = partial
+
+    def _unplayed_modes(self) -> list[str]:
+        played = set(self.data["weekly"].get("modes_played", []))
+        return [m for m in [*MODES, "fly_snap"] if m not in played]
+
+    def _ensure_daily_challenges(self) -> None:
+        daily = self.data["daily"]
+        current = daily.get("challenges") or []
+        if current and all(c["id"].startswith(daily["date"]) for c in current):
+            return
+        daily["challenges"] = daily_challenges.generate_day(
+            daily["date"],
+            self.profile_id,
+            focus_ranking(self.skills, self.journal_focus())[: daily_challenges.TOPIC_POOL],
+            self._unplayed_modes(),
+        )
+
+    def _bump_daily(self, events: list, signals: dict) -> None:
+        """Advance today's challenges; +20 XP each and a bonus for all three."""
+        daily = self.data["daily"]
+        chals = daily.get("challenges") or []
+        for challenge in chals:
+            if not daily_challenges.apply(challenge, signals):
+                continue
+            xp = daily_challenges.DAILY_XP
+            all_done = all(c["done"] for c in chals)
+            if all_done:
+                xp += daily_challenges.DAILY_ALL_BONUS
+            daily["xp_today"] += xp
+            self._log_day(0, 0, xp)
+            self._add_xp(xp, events)
+            described = daily_challenges.describe(challenge)
+            self._daily_done.append({**described, "xp": xp, "all_done": all_done})
+            events.append(
+                (
+                    EVENT_DAILY_CHALLENGE_COMPLETE,
+                    {
+                        "profile_id": self.profile_id,
+                        "name": self.name,
+                        "challenge": described,
+                        "all_done": all_done,
+                    },
+                )
+            )
+
+    def _take_daily_done(self) -> list[dict]:
+        done, self._daily_done = self._daily_done, []
+        return done
 
     def _ensure_challenges(self) -> None:
         weekly = self.data["weekly"]
@@ -238,26 +293,28 @@ class ProfileCoordinator:
                     : challenges.TOPIC_POOL
                 ],
                 mastery={s: st.mastery for s, st in self.skills.items()},
+                daily_goal=self.daily_goal,
             )
 
     def _bump_challenges(self, events: list, deltas: dict[str, int]) -> None:
         """Advance weekly challenge progress; award XP/freeze on completion."""
         weekly = self.data["weekly"]
+        today = self.data["daily"]["date"]
         for challenge in weekly.get("challenges", []):
             if challenge["done"]:
                 continue
-            if challenge["type"] == "modes":
-                challenge["progress"] = len(set(weekly["modes_played"]))
-            elif challenge["type"] == "topic_correct":
-                challenge["progress"] += deltas.get(f"correct:{challenge['skill']}", 0)
-            elif challenge["type"] == "topic_raise":
+            kind = challenge["type"]
+            if kind == "modes":
+                challenges.count_mode(
+                    challenge, deltas.get("mode"), today, weekly["modes_played"])
+            elif kind == "topic_correct":
+                challenges.count(challenge, deltas.get(f"correct:{challenge['skill']}", 0), today)
+            elif kind == "topic_raise":
                 state = self.skills.get(challenge["skill"])
                 if state is not None:
-                    challenge["progress"] = max(
-                        0, int(state.mastery - challenge.get("start", 0.0))
-                    )
-            elif challenge["type"] in deltas:
-                challenge["progress"] += deltas[challenge["type"]]
+                    challenges.count_raise(challenge, state.mastery, today)
+            elif kind in deltas:
+                challenges.count(challenge, deltas[kind], today)
             if challenge["progress"] >= challenge["target"]:
                 challenge["done"] = True
                 self._add_xp(challenges.CHALLENGE_XP, events)
@@ -339,12 +396,14 @@ class ProfileCoordinator:
             round_dict["new_level"] = level
             round_dict["new_badges"] = [badge_public(b, "now") for b in new_badges]
             round_dict["daily_goal_met"] = self.data["daily"]["goal_met"]
+            round_dict["daily_done"] = self._take_daily_done()
             response["results"] = round_dict
             self.sessions.pop(session_id, None)
         else:
             question = session.next_question()
             response["next_question"] = question.to_wire(session.index, session.length)
             response["new_badges"] = [badge_public(b, "now") for b in new_badges]
+            response["daily_done"] = self._take_daily_done()
 
         self._save()
         self._notify()
@@ -429,6 +488,7 @@ class ProfileCoordinator:
         per_day = weekly["per_day"].setdefault(daily["date"], {"q": 0, "c": 0})
         per_day["q"] += questions
         per_day["c"] += counted_correct
+        new_game = "fly_snap" not in weekly["modes_played"]
         for bucket in (daily, weekly):
             if "fly_snap" not in bucket["modes_played"]:
                 bucket["modes_played"].append("fly_snap")
@@ -459,10 +519,12 @@ class ProfileCoordinator:
 
         self._bump_challenges(
             events,
-            {"arcade_games": 1, "questions": questions, "correct": counted_correct, "xp": xp},
+            {"arcade_games": 1, "questions": questions, "correct": counted_correct, "xp": xp,
+             "mode": "fly_snap"},
         )
         if not daily["goal_met"] and daily["questions"] >= self.daily_goal:
             self._meet_daily_goal(events, new_badges)
+        self._bump_daily(events, {"fly_rounds": rounds_completed, "new_game": new_game})
         new_badges += self._check_badges({"trigger": "arcade"}, events)
 
         events.append(
@@ -494,6 +556,7 @@ class ProfileCoordinator:
             "new_level": level,
             "new_badges": [badge_public(b, "now") for b in new_badges],
             "daily_goal_met": daily["goal_met"],
+            "daily_done": self._take_daily_done(),
         }
 
     # ------------------------------------------------------------------ scoring plumbing
@@ -525,6 +588,14 @@ class ProfileCoordinator:
         if outcome.speed_bonus:
             deltas["speed"] = 1
         self._bump_challenges(events, deltas)
+        self._bump_daily(
+            events,
+            {
+                f"correct:{outcome.skill}": 1 if outcome.correct else 0,
+                "run_streak": outcome.run_streak,
+                "speed": 1 if outcome.speed_bonus else 0,
+            },
+        )
 
         if not daily["goal_met"] and daily["questions"] >= self.daily_goal:
             self._meet_daily_goal(events, new_badges)
@@ -540,6 +611,7 @@ class ProfileCoordinator:
 
         daily["goal_met"] = True
         daily["met_at"] = dt_util.now().isoformat()
+        self._bump_challenges(events, {"goal_days": 1})
 
         if streak["last_goal_date"] == yesterday_iso:
             streak["current"] += 1
@@ -585,6 +657,7 @@ class ProfileCoordinator:
         weekly = self.data["weekly"]
         daily["rounds"] += 1
         weekly["rounds"] += 1
+        new_game = session.mode_id not in weekly["modes_played"]
         if session.mode_id not in daily["modes_played"]:
             daily["modes_played"].append(session.mode_id)
         if session.mode_id not in weekly["modes_played"]:
@@ -619,7 +692,7 @@ class ProfileCoordinator:
         self._log_day(0, 0, bonus)
         level_up = self._add_xp(bonus, events)
 
-        deltas = {"xp": bonus}
+        deltas = {"xp": bonus, "mode": session.mode_id}
         if round_dict["correct"] == round_dict["total"] and round_dict["total"] >= 10:
             deltas["perfect_rounds"] = 1
         if round_dict.get("boss_defeated"):
@@ -638,6 +711,14 @@ class ProfileCoordinator:
                     "xp_gained": round_dict["xp_gained"],
                 },
             )
+        )
+        self._bump_daily(
+            events,
+            {
+                "round_correct": round_dict["correct"],
+                "round_mode": session.mode_id,
+                "new_game": new_game,
+            },
         )
         new_badges += self._check_badges({"trigger": "round", "round": round_dict}, events)
         return level_up
@@ -780,9 +861,13 @@ class ProfileCoordinator:
             "history": list(reversed(self.data["history"][-5:])),
             "badge_count": len(self.data["badges"]),
             "challenges": [
-                challenges.describe(c)
+                challenges.describe(c, self.data["daily"]["date"])
                 for c in self.data["weekly"].get("challenges", [])
             ],
+            "daily_challenges": [
+                daily_challenges.describe(c) for c in self.data["daily"].get("challenges", [])
+            ],
+            "daily_bonus": daily_challenges.DAILY_ALL_BONUS,
             "school_year": self.school_year,
             "focus": self.focus_topics(),
             "journal": {
@@ -1013,6 +1098,8 @@ class ProfileCoordinator:
             self.data["daily"]["xp_today"] += xp_gained
             self._log_day(0, 0, xp_gained)
             level_up = self._add_xp(xp_gained, events)
+        if entry["date"] == today.isoformat():
+            self._bump_daily(events, {"journal": 1})
 
         new_badges = self._check_badges(
             {
@@ -1053,6 +1140,7 @@ class ProfileCoordinator:
             "level_up": level_up,
             "new_level": level,
             "new_badges": [badge_public(b, "now") for b in new_badges],
+            "daily_done": self._take_daily_done(),
         }
 
     def add_journal_subject(self, name: str, emoji: str, force: bool) -> dict:
@@ -1170,7 +1258,8 @@ class ProfileCoordinator:
             {"skill": f["skill"], "name": f["name"], "mastery": f["mastery"]}
             for f in self.focus_topics()
         ]
-        not_practised = [
+        partial = bool(weekly.get("snapshot_partial"))
+        not_practised = [] if partial else [
             journal.topic_name(s)
             for s, st in self.skills.items()
             if a_start and st.attempts == a_start.get(s, st.attempts)
@@ -1222,6 +1311,7 @@ class ProfileCoordinator:
             "improved": improved,
             "needs_work": needs_work,
             "not_practised": not_practised,
+            "partial_week": partial,
             "journal": {
                 "entries": len(week_entries),
                 "subjects": dict(sorted(subj_counts.items(), key=lambda i: -i[1])),

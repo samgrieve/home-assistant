@@ -70,7 +70,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert msg["result"]["earned"] == []
-    assert len(msg["result"]["locked"]) == 30
+    assert len(msg["result"]["locked"]) == 31
 
 
 async def test_get_statistics_empty_profile(hass: HomeAssistant, hass_ws_client):
@@ -440,6 +440,10 @@ async def test_journal_entry_flow(hass: HomeAssistant, hass_ws_client):
 
     entry = await setup_profile(hass)
     pid = entry.entry_id
+    # Keep this test about journal XP only (no daily-challenge rewards).
+    daily = hass.data[DOMAIN]["coordinators"][pid].data["daily"]
+    daily["challenges"] = [{"id": f"{daily['date']}-good_round", "type": "good_round",
+                            "target": 1, "progress": 0, "done": False}]
     client = await hass_ws_client(hass)
     events = async_capture_events(hass, "learning_games_journal_entry")
     goal_events = async_capture_events(hass, EVENT_DAILY_GOAL)
@@ -752,3 +756,117 @@ async def test_statistics_mastery_grid_fields(
     await parent.send_json({"id": 1, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
     st = (await parent.receive_json())["result"]
     assert st["is_parent"] is True and st["parents_configured"] is True
+
+
+# ---------------------------------------------------------------- v1.5: caps & daily
+
+
+async def _play_round(hass, client, c, pid, mode, rid, right=True):
+    await client.send_json({"id": rid, "type": f"{DOMAIN}/start_session",
+                            "profile_id": pid, "mode": mode, "length": 10})
+    res = (await client.receive_json())["result"]
+    sid, q = res["session_id"], res["question"]
+    done = []
+    for i in range(10):
+        sess = c.sessions[sid]
+        await client.send_json({
+            "id": rid + 1 + i, "type": f"{DOMAIN}/submit_answer", "profile_id": pid,
+            "session_id": sid, "question_id": q["question_id"],
+            "answer": sess.current.answer if right else "zzz", "elapsed_ms": 2000,
+        })
+        r = (await client.receive_json())["result"]
+        done += r.get("daily_done", []) + r.get("results", {}).get("daily_done", [])
+        q = r.get("next_question")
+    return r["results"], done
+
+
+async def test_weekly_caps_stop_one_session_finishing(hass: HomeAssistant, freezer):
+    import random as _random
+
+    from custom_components.learning_games.engine import challenges as ch
+
+    freezer.move_to("2026-11-30 10:00:00+00:00")  # a Monday
+    entry = await setup_profile(hass, daily_goal=30)
+    c = hass.data[DOMAIN]["coordinators"][entry.entry_id]
+    weekly = c.data["weekly"]
+    assert weekly["week_start"] == "2026-11-30"
+    ws = weekly["week_start"]
+
+    def make(kind, target):
+        return {**ch._make(ws, ch.TYPES_BY_ID[kind], _random.Random(1), 30), "target": target}
+
+    weekly["challenges"] = [make("questions", 120), make("goal_days", 3), make("modes", 6)]
+    modes = ["times_tables_blitz", "number_crunch", "spelling_star", "word_wizard",
+             "tricky_twins", "word_builder", "shop_keeper", "fraction_lab"]
+
+    def play(mode):
+        res = c.start_session(mode, 10)
+        sid, q = res["session_id"], res["question"]
+        for _ in range(10):
+            r = c.submit_answer(sid, q["question_id"], c.sessions[sid].current.answer, 2000)
+            q = r.get("next_question")
+
+    for i in range(20):  # 200 questions in one marathon Monday
+        play(modes[i % len(modes)])
+    q, goal, explorer = weekly["challenges"]
+    assert q["progress"] == 45 and not q["done"]
+    assert goal["progress"] == 1 and not goal["done"]
+    assert explorer["progress"] == 3 and not explorer["done"]
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.maya_s_learning_games_daily_goal_met").state == "on"
+    attrs = hass.states.get("sensor.maya_s_learning_games_weekly_challenges_done").attributes
+    assert attrs["challenges"][0]["capped_today"] is True
+    assert attrs["challenges"][0]["desc"] == "Answer 120 questions (up to 45 a day)"
+
+    for day in (1, 2):
+        freezer.move_to(f"2026-12-0{day} 10:00:00+00:00")
+        for i in range(5):
+            play(modes[(i + day * 3) % len(modes)])
+    assert q["done"] and goal["done"]
+    assert explorer["progress"] == 6 and explorer["done"]
+
+
+async def test_daily_challenges_reward_and_triple_threat(hass: HomeAssistant, hass_ws_client):
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    entry = await setup_profile(hass, daily_goal=100)
+    pid = entry.entry_id
+    c = hass.data[DOMAIN]["coordinators"][pid]
+    events = async_capture_events(hass, "learning_games_daily_challenge_complete")
+    today = c.data["daily"]["date"]
+    c.data["daily"]["challenges"] = [
+        {"id": f"{today}-topic_today", "type": "topic_today", "target": 5, "progress": 0,
+         "done": False, "skill": "maths.times_tables"},
+        {"id": f"{today}-streak_run", "type": "streak_run", "target": 7, "progress": 0,
+         "done": False},
+        {"id": f"{today}-journal", "type": "journal", "target": 1, "progress": 0,
+         "done": False},
+    ]
+    client = await hass_ws_client(hass)
+    xp_before = c.data["xp"]["total"]
+    results, done = await _play_round(hass, client, c, pid, "times_tables_blitz", 10)
+    assert {d["type"] for d in done} == {"topic_today", "streak_run"}
+    assert all(d["xp"] == 20 for d in done)
+    state = hass.states.get("sensor.maya_s_learning_games_daily_challenges_done")
+    assert state.state == "2"
+    assert state.attributes["challenges"][0]["desc"] == "Get 5 Times tables answers right"
+
+    await client.send_json({
+        "id": 500, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": today, "subjects": [{"id": "art", "enjoy": 5}],
+    })
+    res = (await client.receive_json())["result"]
+    assert res["daily_done"][0]["type"] == "journal"
+    assert res["daily_done"][0]["xp"] == 50 and res["daily_done"][0]["all_done"]
+    assert "triple_threat" in [b["id"] for b in res["new_badges"]]
+    await hass.async_block_till_done()
+    assert [e.data["all_done"] for e in events] == [False, False, True]
+    # 10 answers' XP + round bonus + 20 + 20 + 50 (journal 15 XP on top)
+    assert c.data["xp"]["total"] - xp_before == results["xp_gained"] + 90 + 15
+    # The question goal is untouched by challenge XP.
+    assert c.data["daily"]["questions"] == 10
+    assert hass.states.get("binary_sensor.maya_s_learning_games_daily_goal_met").state == "off"
+
+    await client.send_json({"id": 501, "type": f"{DOMAIN}/get_stats", "profile_id": pid})
+    stats = (await client.receive_json())["result"]
+    assert all(d["done"] for d in stats["daily_challenges"])

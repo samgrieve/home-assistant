@@ -214,3 +214,21 @@ async def test_low_skills_recorded_on_load(hass: HomeAssistant):
     coordinator = await make_coordinator(hass)
     assert set(coordinator.data["low_skills"]) == set(ALL_SKILLS)  # all start at 0%
     assert coordinator.data["focus_rounds"] == 0
+
+
+async def test_mid_week_snapshot_is_partial(hass: HomeAssistant):
+    coordinator = await make_coordinator(hass)
+    weekly = coordinator.data["weekly"]
+    # A profile first loaded mid-week (like the 1.4 upgrade) has a partial snapshot.
+    weekly["mastery_start"] = {}
+    coordinator._check_rollover()
+    assert weekly["snapshot_partial"] is True
+    summary = coordinator.weekly_summary()
+    assert summary["partial_week"] is True and summary["not_practised"] == []
+
+    # A snapshot taken at the weekly rollover is complete.
+    weekly["week_start"] = "2000-01-03"
+    coordinator._check_rollover()
+    assert coordinator.data["weekly"]["snapshot_partial"] is False
+    assert coordinator.weekly_summary()["not_practised"]  # nothing played yet: all listed
+    assert len(coordinator.data["daily"]["challenges"]) == 3

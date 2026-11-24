@@ -117,7 +117,7 @@ def test_earned_badges_not_re_earned():
 
 
 def test_badge_metadata_complete():
-    assert len(BADGES) == 30
+    assert len(BADGES) == 31
     for badge in BADGES:
         for key in ("id", "name", "icon", "desc", "hint", "predicate"):
             assert badge[key], f"{badge['id']} missing {key}"

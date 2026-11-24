@@ -205,6 +205,13 @@ BADGES: list[dict] = [
         "predicate": lambda d, c: d.get("focus_rounds", 0) >= SHARP_FOCUS_ROUNDS,
     },
     {
+        "id": "triple_threat", "name": "Triple Threat", "icon": "🌈",
+        "desc": "Finish all 3 daily challenges in one day",
+        "hint": "Complete every one of today's challenges",
+        "predicate": lambda d, c: (ch := d.get("daily", {}).get("challenges"))
+        and len(ch) >= 3 and all(x.get("done") for x in ch),
+    },
+    {
         "id": "dear_diary", "name": "Dear Diary", "icon": "📔",
         "desc": "Write your first journal entry",
         "hint": "Tell your journal what you learned today",
