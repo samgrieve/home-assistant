@@ -30,6 +30,20 @@ def test_default_data_shape():
     assert data["daily"]["goal_met"] is False
 
 
+def test_old_profile_gains_journal_without_losing_progress():
+    old = default_data("Maya", "fox", "2026-06-12")
+    del old["journal"]  # profile saved by v1.2.0
+    old["xp"] = {"total": 2384, "level": 9}
+    old["badges"] = {"first_steps": "2026-06-12T10:00:00"}
+    old["streak"]["current"] = 4
+    merged = merge_defaults(old, "Maya", "fox", "2026-11-24")
+    assert merged["xp"] == {"total": 2384, "level": 9}
+    assert merged["badges"] == {"first_steps": "2026-06-12T10:00:00"}
+    assert merged["streak"]["current"] == 4
+    assert merged["journal"]["entries"] == {}
+    assert "science" in merged["journal"]["subjects"]
+
+
 def test_merge_defaults_adds_new_fields():
     old = default_data("Maya", "fox", "2026-06-12")
     del old["weekly"]

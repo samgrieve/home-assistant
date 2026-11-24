@@ -17,10 +17,13 @@ from .const import (
     CONF_AVATAR,
     CONF_DAILY_GOAL,
     CONF_NAME,
+    CONF_PARENT_USERS,
     DEFAULT_DAILY_GOAL,
     EVENT_BADGE_EARNED,
     EVENT_CHALLENGE_COMPLETE,
     EVENT_DAILY_GOAL,
+    EVENT_JOURNAL_ENTRY,
+    EVENT_JOURNAL_REVIEWED,
     EVENT_LEVEL_UP,
     EVENT_SESSION_COMPLETE,
     EVENT_STREAK_MILESTONE,
@@ -37,6 +40,7 @@ from .engine import (
     adaptive,
     arcade,
     challenges,
+    journal,
 )
 from .engine.badges import badge_public, check_badges
 from .engine.models import SkillState
@@ -99,6 +103,13 @@ class ProfileCoordinator:
         return self.entry.options.get(
             CONF_AVATAR, self.entry.data.get(CONF_AVATAR, "fox")
         )
+
+    @property
+    def parent_users(self) -> list[str]:
+        return list(self.entry.options.get(CONF_PARENT_USERS, []))
+
+    def is_parent(self, user_id: str | None) -> bool:
+        return bool(user_id) and user_id in self.parent_users
 
     @property
     def daily_goal(self) -> int:
@@ -701,6 +712,11 @@ class ProfileCoordinator:
                 challenges.describe(c)
                 for c in self.data["weekly"].get("challenges", [])
             ],
+            "journal": {
+                "done_today": self._today().isoformat() in self.journal["entries"],
+                "streak": journal.journal_streak(self.journal["entries"], self._today()),
+                "unseen_reviews": self.unseen_reviews(),
+            },
             "arcade": {
                 "name": "Fly Snap",
                 "emoji": "🐸",
@@ -785,6 +801,7 @@ class ProfileCoordinator:
             "strongest": strongest,
             "weakest": weakest,
             "badge_count": len(self.data["badges"]),
+            "journal_stats": journal.subject_stats(self.journal, today),
         }
 
     def badges_payload(self) -> dict:
@@ -800,6 +817,236 @@ class ProfileCoordinator:
             if b["id"] not in self.data["badges"]
         ]
         return {"earned": earned, "locked": locked}
+
+    # ------------------------------------------------------------------ learning journal
+
+    @property
+    def journal(self) -> dict:
+        return self.data["journal"]
+
+    def _journal_url(self, entry_date: str) -> str:
+        return f"?lg=journal&date={entry_date}"
+
+    def _entry_public(self, entry: dict, full: bool = True) -> dict:
+        jr = self.journal
+        items = []
+        for item in entry.get("subjects", []):
+            sid = journal.resolve(jr, item["id"])
+            subject = jr["subjects"].get(sid, {})
+            items.append(
+                {
+                    **item,
+                    "id": sid,
+                    "name": subject.get("name", sid),
+                    "emoji": subject.get("emoji", "📘"),
+                }
+            )
+        out = {
+            "date": entry["date"],
+            "mood": entry.get("mood"),
+            "subjects": items,
+            "reviews": list(entry.get("reviews", [])),
+            "seen_reviews": entry.get("seen_reviews", True),
+            "updated_ts": entry.get("updated_ts"),
+        }
+        if full:
+            for key in ("did", "enjoyed", "tricky"):
+                out[key] = entry.get(key, "")
+        else:
+            out["snippet"] = journal.snippet(entry, 120)
+        return out
+
+    def _subjects_public(self, include_hidden: bool) -> list[dict]:
+        stats = {s["id"]: s for s in journal.subject_stats(self.journal, self._today())}
+        subjects = [
+            {
+                "id": s["id"],
+                "name": s["name"],
+                "emoji": s["emoji"],
+                "hidden": s.get("hidden", False),
+                "count": stats.get(s["id"], {}).get("count", 0),
+            }
+            for s in journal.active_subjects(self.journal, include_hidden)
+        ]
+        subjects.sort(key=lambda s: (s["hidden"], -s["count"], s["name"].lower()))
+        return subjects
+
+    def unseen_reviews(self) -> list[dict]:
+        out = []
+        for iso in sorted(self.journal["entries"], reverse=True):
+            entry = self.journal["entries"][iso]
+            if entry.get("reviews") and not entry.get("seen_reviews", True):
+                out.append({"date": iso, "reviews": entry["reviews"]})
+        return out
+
+    def journal_payload(self, entry_date: str | None, user_id: str | None) -> dict:
+        self._check_rollover()
+        today = self._today()
+        parent = self.is_parent(user_id)
+        editable = journal.editable_dates(today)
+        entries = self.journal["entries"]
+        entry_date = entry_date or editable[0]
+        entry = entries.get(entry_date)
+        recent = [
+            self._entry_public(entries[iso], full=parent)
+            for iso in sorted(entries, reverse=True)[:30 if parent else 14]
+        ]
+        return {
+            "profile_id": self.profile_id,
+            "name": self.name,
+            "today": today.isoformat(),
+            "date": entry_date,
+            "editable_dates": editable,
+            "entry": self._entry_public(entry) if entry else None,
+            "subjects": self._subjects_public(include_hidden=parent),
+            "recent": recent,
+            "stats": journal.subject_stats(self.journal, today),
+            "streak": journal.journal_streak(entries, today),
+            "unseen_reviews": self.unseen_reviews(),
+            "is_parent": parent,
+            "parents_configured": bool(self.parent_users),
+            "reactions": list(journal.REACTIONS),
+            "xp_per_entry": journal.JOURNAL_XP,
+        }
+
+    def save_journal_entry(self, payload: dict) -> dict:
+        self._check_rollover()
+        today = self._today()
+        body = journal.validate_entry(self.journal, payload, today)
+        now_iso = dt_util.now().isoformat()
+        entry, is_update = journal.upsert_entry(self.journal, body, now_iso)
+
+        events: list[tuple[str, dict]] = []
+        xp_gained = 0
+        level_up = False
+        # One XP award per day, and only for today's entry (no back-fill farming).
+        if entry["date"] == today.isoformat() and not entry.get("xp_awarded"):
+            entry["xp_awarded"] = True
+            xp_gained = journal.JOURNAL_XP
+            self.data["daily"]["xp_today"] += xp_gained
+            self._log_day(0, 0, xp_gained)
+            level_up = self._add_xp(xp_gained, events)
+
+        new_badges = self._check_badges(
+            {
+                "trigger": "journal",
+                "entry": entry,
+                "journal_streak": journal.journal_streak(self.journal["entries"], today),
+            },
+            events,
+        )
+        mood_faces = {1: "😞", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"}
+        events.append(
+            (
+                EVENT_JOURNAL_ENTRY,
+                {
+                    "profile_id": self.profile_id,
+                    "name": self.name,
+                    "date": entry["date"],
+                    "subjects": journal.subject_names(self.journal, entry),
+                    "mood": entry.get("mood"),
+                    "mood_emoji": mood_faces.get(entry.get("mood"), ""),
+                    "snippet": journal.snippet(entry),
+                    "is_update": is_update,
+                    "url": self._journal_url(entry["date"]),
+                },
+            )
+        )
+
+        self._save()
+        self._notify()
+        for event_type, event_data in events:
+            self.hass.bus.async_fire(event_type, event_data)
+
+        level, _, _ = level_progress(self.data["xp"]["total"])
+        return {
+            "entry": self._entry_public(entry),
+            "is_update": is_update,
+            "xp_gained": xp_gained,
+            "level_up": level_up,
+            "new_level": level,
+            "new_badges": [badge_public(b, "now") for b in new_badges],
+        }
+
+    def add_journal_subject(self, name: str, emoji: str, force: bool) -> dict:
+        result = journal.add_subject(
+            self.journal, name, emoji, self._today().isoformat(), force=force
+        )
+        if result["status"] != "similar":
+            self._save()
+            self._notify()
+        return result
+
+    def update_journal_subject(self, subject_id: str, **changes) -> dict:
+        subject = journal.update_subject(self.journal, subject_id, **changes)
+        self._save()
+        self._notify()
+        return subject
+
+    def merge_journal_subjects(self, src: str, dst: str) -> dict:
+        subject = journal.merge_subject(self.journal, src, dst)
+        self._save()
+        self._notify()
+        return subject
+
+    def review_journal_entry(self, entry_date: str, reaction: str | None, comment: str,
+                             user_id: str, user_name: str) -> dict:
+        entry = self.journal["entries"].get(entry_date)
+        if entry is None:
+            raise journal.JournalError("unknown_entry")
+        review = journal.add_review(
+            entry, user_id, user_name, reaction, comment, dt_util.now().isoformat()
+        )
+        self._save()
+        self._notify()
+        self.hass.bus.async_fire(
+            EVENT_JOURNAL_REVIEWED,
+            {
+                "profile_id": self.profile_id,
+                "name": self.name,
+                "date": entry_date,
+                "reviewer": user_name,
+                "reaction": reaction,
+                "comment": review["comment"],
+                "url": self._journal_url(entry_date),
+            },
+        )
+        return self._entry_public(entry)
+
+    def mark_reviews_seen(self, entry_date: str | None) -> None:
+        for iso, entry in self.journal["entries"].items():
+            if entry_date is None or iso == entry_date:
+                entry["seen_reviews"] = True
+        self._save()
+        self._notify()
+
+    def journal_sensor_attrs(self) -> dict:
+        today = self._today()
+        entries = self.journal["entries"]
+        week_start = (today - timedelta(days=today.weekday())).isoformat()
+        last_iso = max(entries) if entries else None
+        last = entries.get(last_iso) if last_iso else None
+        return {
+            "total_entries": len(entries),
+            "entries_this_week": sum(1 for iso in entries if iso >= week_start),
+            "journal_streak": journal.journal_streak(entries, today),
+            "unreviewed_count": sum(1 for e in entries.values() if not e.get("reviews")),
+            "last_entry": {
+                "date": last_iso,
+                "subjects": journal.subject_names(self.journal, last),
+                "mood": last.get("mood"),
+                "reviewed": bool(last.get("reviews")),
+            } if last else None,
+            "subjects": {
+                s["name"]: {
+                    "count": s["count"],
+                    "last_done": s["last_done"],
+                    "avg_enjoy": s["avg_enjoy"],
+                    "tricky": s["tricky"],
+                }
+                for s in journal.subject_stats(self.journal, today)
+            },
+        }
 
     # ------------------------------------------------------------------ sensor helpers
 

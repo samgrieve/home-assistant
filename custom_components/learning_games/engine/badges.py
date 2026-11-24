@@ -7,8 +7,21 @@ ctx keys:
   trigger:  "answer" | "round" | "goal"
   round:    dict from RoundResults (only on trigger == "round")
   comeback: True when today's goal was met the day after a streak freeze
+  trigger == "journal" also carries:
+  journal_streak: consecutive days with a journal entry
+  entry:          the journal entry just saved
 """
 from __future__ import annotations
+
+from .journal import distinct_subjects_logged
+
+DEEP_THINKER_CHARS = 20
+
+
+def _deep_entry(entry: dict | None) -> bool:
+    return bool(entry) and all(
+        len(entry.get(key, "")) >= DEEP_THINKER_CHARS for key in ("did", "enjoyed", "tricky")
+    )
 
 
 def _total_questions(data: dict) -> int:
@@ -161,6 +174,30 @@ BADGES: list[dict] = [
         "hint": "Finish every challenge in one week",
         "predicate": lambda d, c: (ch := d.get("weekly", {}).get("challenges"))
         and len(ch) >= 3 and all(x["done"] for x in ch),
+    },
+    {
+        "id": "dear_diary", "name": "Dear Diary", "icon": "📔",
+        "desc": "Write your first journal entry",
+        "hint": "Tell your journal what you learned today",
+        "predicate": lambda d, c: len(d.get("journal", {}).get("entries", {})) >= 1,
+    },
+    {
+        "id": "reflective_writer", "name": "Reflective Writer", "icon": "🪞",
+        "desc": "Write in your journal 7 days in a row",
+        "hint": "Write in your journal every day for a week",
+        "predicate": lambda d, c: c.get("journal_streak", 0) >= 7,
+    },
+    {
+        "id": "curious_mind", "name": "Curious Mind", "icon": "🧭",
+        "desc": "Log 5 different subjects in your journal",
+        "hint": "Try lots of different subjects",
+        "predicate": lambda d, c: "journal" in d and distinct_subjects_logged(d["journal"]) >= 5,
+    },
+    {
+        "id": "deep_thinker", "name": "Deep Thinker", "icon": "💭",
+        "desc": "Answer all three journal questions in detail",
+        "hint": "Write about what you did, enjoyed AND found tricky",
+        "predicate": lambda d, c: c.get("trigger") == "journal" and _deep_entry(c.get("entry")),
     },
 ]
 

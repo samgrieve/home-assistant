@@ -8,6 +8,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, STORAGE_MINOR_VERSION, STORAGE_VERSION
 from .engine import ALL_SKILLS
+from .engine.journal import default_journal
 
 SAVE_DELAY_SECONDS = 2
 
@@ -30,6 +31,7 @@ def default_data(name: str, avatar: str, created: str) -> dict:
         "history": [],
         "daily_log": {},  # {iso_date: {"q": int, "c": int, "xp": int}} — last ~5 weeks
         "arcade": {"games": 0, "wins": 0, "best_round": 0, "categories_won": []},
+        "journal": default_journal(created),
     }
 
 

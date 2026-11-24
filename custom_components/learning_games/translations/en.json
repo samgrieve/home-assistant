@@ -24,7 +24,11 @@
         "title": "Profile settings",
         "data": {
           "avatar": "Avatar",
-          "daily_goal": "Daily goal (questions per day)"
+          "daily_goal": "Daily goal (questions per day)",
+          "parent_users": "Parents (can react to and reply to journal entries)"
+        },
+        "data_description": {
+          "parent_users": "Pick the Home Assistant users who can review this child's learning journal. Leave the child's own account unticked."
         }
       }
     }
