@@ -717,3 +717,38 @@ async def test_topic_challenges_progress_and_focus_rounds(hass: HomeAssistant, h
     assert attrs["challenges"][0]["desc"] == "Get 10 Times tables answers right"
     assert set(attrs["challenges"][2]) == {
         "id", "type", "name", "icon", "desc", "target", "progress", "done"}
+
+
+async def test_statistics_mastery_grid_fields(
+    hass: HomeAssistant, hass_ws_client, hass_admin_user, hass_read_only_access_token
+):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    c = hass.data[DOMAIN]["coordinators"][pid]
+    kid = await hass_ws_client(hass, access_token=hass_read_only_access_token)
+    await kid.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    today = (await kid.receive_json())["result"]["today"]
+    await kid.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid, "date": today,
+        "subjects": [{"id": "maths", "difficulty": "tricky", "topics": ["maths.decimals"]}],
+    })
+    assert (await kid.receive_json())["success"]
+    c.skills["maths.money"].mastery = c.data["weekly"]["mastery_start"]["maths.money"] + 7
+
+    await kid.send_json({"id": 3, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await kid.receive_json())["result"]
+    by = {s["skill"]: s for s in st["skills"]}
+    assert len(by) == 17
+    assert by["maths.decimals"]["flagged"] is True
+    assert by["maths.money"]["flagged"] is False
+    assert by["maths.money"]["week_change"] == 7
+    assert by["maths.long_multiplication"]["name"] == "Long multiplication"
+    assert st["is_parent"] is False and st["parents_configured"] is False
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "parent_users": [hass_admin_user.id]})
+    await hass.async_block_till_done()
+    parent = await hass_ws_client(hass)
+    await parent.send_json({"id": 1, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await parent.receive_json())["result"]
+    assert st["is_parent"] is True and st["parents_configured"] is True

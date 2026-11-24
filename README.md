@@ -44,6 +44,7 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 **📅 Weekly summary**
 - `sensor.<name>_weekly_summary`: its state is the week's start date. Its attributes cover the week's questions, accuracy, days played, days the goal was met, XP, badges, topics that improved, topics that need work and topics not practised. They also include journal highlights (subjects, what she loved, what was tricky) and ready-made `parent_title` / `parent_text` / `kid_title` / `kid_text` for notifications. Her own journal writing is never included
 - The Statistics screen has a **This week** section, with a comparison against last week. The last 12 weeks are kept for trends
+- **🧩 All topics grid** (parents): every topic as a colour-coded tile, grouped into Maths and English with the weakest first. Each tile shows mastery, level, accuracy, this week's change, and 🧗 if she marked it tricky in her journal. It shows to everyone until parents are set in the options
 - Deep link `?lg=stats` opens Statistics directly
 
 **🎒 Grows with her**

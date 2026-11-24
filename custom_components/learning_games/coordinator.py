@@ -800,7 +800,7 @@ class ProfileCoordinator:
             },
         }
 
-    def statistics_payload(self) -> dict:
+    def statistics_payload(self, user_id: str | None = None) -> dict:
         """Richer stats for the parent/player statistics screen.
 
         Returns a contiguous 30-day usage log (for the heat map), per-skill
@@ -825,6 +825,9 @@ class ProfileCoordinator:
             if q:
                 active_days += 1
 
+        focus = self.journal_focus()
+        tricky = journal.tricky_reasons(self.journal, today)
+        week_start = self.data["weekly"].get("mastery_start") or {}
         skills: list[dict] = []
         for skill, state in self.skills.items():
             accuracy = (
@@ -839,6 +842,11 @@ class ProfileCoordinator:
                     "attempts": state.attempts,
                     "correct": state.correct,
                     "accuracy": accuracy,
+                    "name": journal.topic_name(skill),
+                    "week_change": (
+                        round(state.mastery - week_start[skill]) if skill in week_start else None
+                    ),
+                    "flagged": focus.get(skill, 0) > 0 and skill in tricky,
                 }
             )
         practised = [s for s in skills if s["attempts"] > 0]
@@ -877,6 +885,8 @@ class ProfileCoordinator:
             "journal_stats": journal.subject_stats(self.journal, today),
             "week": self.weekly_summary(),
             "school_year": self.school_year,
+            "is_parent": self.is_parent(user_id),
+            "parents_configured": bool(self.parent_users),
         }
 
     def badges_payload(self) -> dict:

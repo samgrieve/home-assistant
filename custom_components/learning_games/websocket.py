@@ -93,7 +93,8 @@ def ws_get_stats(hass, connection, msg) -> None:
 @callback
 def ws_get_statistics(hass, connection, msg) -> None:
     if coordinator := _get_coordinator(hass, connection, msg):
-        connection.send_result(msg["id"], coordinator.statistics_payload())
+        user_id, _ = _user(connection)
+        connection.send_result(msg["id"], coordinator.statistics_payload(user_id))
 
 
 @websocket_api.websocket_command(

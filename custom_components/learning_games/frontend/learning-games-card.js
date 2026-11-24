@@ -1287,10 +1287,41 @@
         <div class="subject-label">Last ${st.window_days} days</div>
         ${this._tplHeatmap(st)}
         ${areas}
+        ${st.is_parent || !st.parents_configured ? this._tplMasteryGrid(st) : ""}
         ${st.journal_stats && st.journal_stats.length ? `
           <div class="subject-label">📔 Journal subjects</div>
           ${this._tplSubjectStats(st.journal_stats)}` : ""}
       `;
+    }
+
+    _tplMasteryGrid(st) {
+      const lvl = (s) => (s.attempts === 0 ? "none" : Math.min(4, Math.floor(s.mastery / 20)));
+      const tile = (s) => {
+        const change = s.week_change == null || s.week_change === 0 ? ""
+          : s.week_change > 0 ? `<span class="mg-up">▲${s.week_change}</span>` : `<span class="mg-down">▼${-s.week_change}</span>`;
+        return `<div class="mg-tile mg-${lvl(s)}" title="${esc(`${s.name}: ${s.mastery}% mastery, level ${s.band}, ${s.attempts} answered`)}">
+          <div class="mg-name">${s.flagged ? "🧗 " : ""}${esc(s.name)}</div>
+          <div class="mg-val">${s.attempts ? `${s.mastery}%` : "—"} ${change}</div>
+          <div class="mg-sub">${s.attempts ? `Lv ${s.band} · ${s.accuracy}% right` : "not tried yet"}</div>
+        </div>`;
+      };
+      const group = (subject, label) => {
+        const items = st.skills.filter((s) => s.subject === subject)
+          .sort((a, b) => (a.attempts === 0) - (b.attempts === 0) || a.mastery - b.mastery);
+        return items.length ? `<div class="mg-group">${label}</div><div class="mg-grid">${items.map(tile).join("")}</div>` : "";
+      };
+      return `<div class="subject-label">🧩 All topics <small>(weakest first)</small></div>
+        ${group("maths", "🔢 Maths")}
+        ${group("english", "📖 English")}
+        <div class="mg-legend">
+          <span class="mg-key mg-none"></span>not tried
+          <span class="mg-key mg-0"></span>0–19
+          <span class="mg-key mg-1"></span>20–39
+          <span class="mg-key mg-2"></span>40–59
+          <span class="mg-key mg-3"></span>60–79
+          <span class="mg-key mg-4"></span>80+
+          · ▲▼ this week · 🧗 tricky in journal
+        </div>`;
     }
 
     _tplWeek(w) {
@@ -2307,6 +2338,22 @@
     .wk { background: #fff; border-radius: 18px; padding: 10px 14px; margin-top: 10px;
       box-shadow: 0 3px 0 #eadcf0; font-size: 15px; display: flex; flex-direction: column; gap: 6px; }
     .wk:empty { display: none; }
+
+    /* ---- mastery grid ---- */
+    .mg-group { font-size: 14px; font-weight: 800; margin: 8px 0 6px; }
+    .mg-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .mg-tile { border-radius: 14px; padding: 8px 10px; box-shadow: 0 2px 0 rgba(0,0,0,0.08); min-width: 0; }
+    .mg-name { font-weight: 800; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mg-val { font-size: 20px; font-weight: 800; }
+    .mg-sub { font-size: 12px; opacity: 0.8; }
+    .mg-up { font-size: 13px; color: #00916f; } .mg-down { font-size: 13px; color: #c0392b; }
+    .mg-none { background: #fff; border: 2px dashed #e0dcf0; box-shadow: none; }
+    .mg-0 { background: #FFD6D6; } .mg-1 { background: #FFE3C2; } .mg-2 { background: #FFF3B0; }
+    .mg-3 { background: #D4F5C9; } .mg-4 { background: #9FE6B8; }
+    .mg-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px;
+      opacity: 0.8; margin-top: 8px; }
+    .mg-key { width: 14px; height: 14px; border-radius: 4px; display: inline-block; margin-left: 6px; }
+    @media (min-width: 700px) { .mg-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
     /* ---- learning journal ---- */
     .jhome-btn { margin-top: 10px; }
