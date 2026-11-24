@@ -127,3 +127,90 @@ async def test_stats_persist_across_reload(hass: HomeAssistant):
 
     coordinator2 = hass.data[DOMAIN]["coordinators"][entry.entry_id]
     assert coordinator2.data["xp"]["total"] == 333
+
+
+async def test_weekly_rollover_archives_summary_and_snapshots(hass: HomeAssistant):
+    coordinator = await make_coordinator(hass)
+    weekly = coordinator.data["weekly"]
+    assert weekly["mastery_start"]  # snapshotted on first load
+    last_week = (
+        dt_util.now().date() - timedelta(days=dt_util.now().date().weekday() + 7)
+    ).isoformat()
+    weekly["week_start"] = last_week
+    weekly["questions"] = 42
+    weekly["correct"] = 30
+    coordinator.skills["maths.fractions"].mastery = 30.0
+    weekly["mastery_start"]["maths.fractions"] = 20.0
+
+    coordinator._check_rollover()
+    history = coordinator.data["weekly_history"]
+    assert len(history) == 1
+    assert history[0]["week_start"] == last_week
+    assert history[0]["questions"] == 42 and history[0]["accuracy"] == 71
+    assert history[0]["improved"][0]["name"] == "Fractions"
+    assert "parent_text" not in history[0]
+    new = coordinator.data["weekly"]
+    assert new["week_start"] != last_week
+    assert new["mastery_start"]["maths.fractions"] == 30.0
+    # This week's summary compares with the archived week.
+    assert coordinator.weekly_summary()["vs_last_week"] == -42
+
+
+async def test_old_profile_upgrade_keeps_progress(hass: HomeAssistant, hass_storage):
+    """A v1.3 save (no subject skills, snapshots or history) loads intact."""
+    from custom_components.learning_games.storage import default_data as dd
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Maya", unique_id=f"{DOMAIN}_maya",
+        data={CONF_NAME: "Maya", CONF_AVATAR: "fox", CONF_DAILY_GOAL: 5},
+    )
+    old = dd("Maya", "fox", "2026-06-12")
+    old.pop("weekly_history")
+    old["weekly"].pop("mastery_start")
+    old["weekly"].pop("attempts_start")
+    for s in old["journal"]["subjects"].values():
+        s.pop("skills")
+    old["xp"] = {"total": 2384, "level": 9}
+    old["badges"] = {"first_steps": "2026-06-12T10:00:00"}
+    old["skills"]["maths.times_tables"].update(
+        {"band": 3, "mastery": 39.2, "attempts": 300, "correct": 250})
+    hass_storage[f"{DOMAIN}.{entry.entry_id}"] = {
+        "version": 1, "minor_version": 1, "key": f"{DOMAIN}.{entry.entry_id}", "data": old}
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    c = hass.data[DOMAIN]["coordinators"][entry.entry_id]
+    assert c.data["xp"]["total"] == 2384
+    assert c.data["badges"] == {"first_steps": "2026-06-12T10:00:00"}
+    tt = c.skills["maths.times_tables"]
+    assert (tt.band, round(tt.mastery, 1), tt.attempts) == (3, 39.2, 300)
+    assert "maths.fractions" in c.data["journal"]["subjects"]["maths"]["skills"]
+    assert c.data["weekly_history"] == []
+    assert c.data["weekly"]["mastery_start"]["maths.times_tables"] == 39.2
+
+
+async def test_school_year_lifts_only_untouched_skills(hass: HomeAssistant):
+    coordinator = await make_coordinator(hass)
+    coordinator.skills["maths.money"].attempts = 10  # practised at band 1
+    hass.config_entries.async_update_entry(
+        coordinator.entry,
+        options={**coordinator.entry.options, "school_year": 7,
+                 "school_year_set_in": 2000 + 100},  # set "in the future": no drift
+    )
+    await hass.async_block_till_done()
+    assert coordinator.school_year == 7
+    assert coordinator.skills["maths.fractions"].band == 3
+    assert coordinator.skills["maths.money"].band == 1
+    # Moving back down never lowers bands.
+    hass.config_entries.async_update_entry(
+        coordinator.entry, options={**coordinator.entry.options, "school_year": 5})
+    await hass.async_block_till_done()
+    assert coordinator.skills["maths.fractions"].band == 3
+    state = hass.states.get("sensor.maya_s_learning_games_level")
+    assert state.attributes["school_year"] == 5
+
+
+async def test_low_skills_recorded_on_load(hass: HomeAssistant):
+    coordinator = await make_coordinator(hass)
+    assert set(coordinator.data["low_skills"]) == set(ALL_SKILLS)  # all start at 0%
+    assert coordinator.data["focus_rounds"] == 0

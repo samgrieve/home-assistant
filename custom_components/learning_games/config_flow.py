@@ -15,6 +15,19 @@ from homeassistant.helpers.selector import (
 )
 
 from homeassistant.helpers.selector import SelectOptionDict
+from homeassistant.util import dt as dt_util
+
+from .engine import curriculum
+
+YEAR_SELECTOR = SelectSelector(
+    SelectSelectorConfig(
+        options=[
+            SelectOptionDict(value=str(y), label=curriculum.label(y))
+            for y in curriculum.SETTABLE_YEARS
+        ],
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
 
 from .const import (
     AVATARS,
@@ -22,6 +35,8 @@ from .const import (
     CONF_DAILY_GOAL,
     CONF_NAME,
     CONF_PARENT_USERS,
+    CONF_SCHOOL_YEAR,
+    CONF_SCHOOL_YEAR_SET_IN,
     DEFAULT_DAILY_GOAL,
     DOMAIN,
 )
@@ -91,6 +106,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_AVATAR: user_input[CONF_AVATAR],
                     CONF_DAILY_GOAL: int(user_input[CONF_DAILY_GOAL]),
                     CONF_PARENT_USERS: list(user_input.get(CONF_PARENT_USERS, [])),
+                    CONF_SCHOOL_YEAR: int(user_input.get(CONF_SCHOOL_YEAR, curriculum.DEFAULT_YEAR)),
+                    # Counted from now: the year moves up every 1 September after this.
+                    CONF_SCHOOL_YEAR_SET_IN: curriculum.academic_year_start(
+                        dt_util.now().date()
+                    ),
                 },
             )
         entry = self.config_entry
@@ -103,6 +123,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             for u in sorted(users, key=lambda u: (u.name or "").lower())
         ]
         known_ids = {u.id for u in users}
+        current_year = curriculum.current_school_year(
+            int(entry.options.get(CONF_SCHOOL_YEAR, curriculum.DEFAULT_YEAR)),
+            entry.options.get(CONF_SCHOOL_YEAR_SET_IN),
+            dt_util.now().date(),
+        )
+        current_year = min(max(current_year, min(curriculum.SETTABLE_YEARS)),
+                           max(curriculum.SETTABLE_YEARS))
         current_parents = [
             uid for uid in entry.options.get(CONF_PARENT_USERS, []) if uid in known_ids
         ]
@@ -116,6 +143,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 {
                     vol.Required(CONF_AVATAR, default=current_avatar): AVATAR_SELECTOR,
                     vol.Required(CONF_DAILY_GOAL, default=current_goal): GOAL_SELECTOR,
+                    vol.Required(CONF_SCHOOL_YEAR, default=str(current_year)): YEAR_SELECTOR,
                     vol.Optional(CONF_PARENT_USERS, default=current_parents): SelectSelector(
                         SelectSelectorConfig(
                             options=user_options,

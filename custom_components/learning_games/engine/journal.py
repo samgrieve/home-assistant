@@ -48,6 +48,54 @@ DEFAULT_SUBJECTS: tuple[tuple[str, str], ...] = (
 )
 
 
+# Which game topics each starter subject covers. "Which bit was tricky?" offers
+# these, and journal ratings on them steer question selection in the games.
+DEFAULT_SUBJECT_SKILLS: dict[str, list[str] | str] = {
+    "maths": "maths.*",
+    "spelling": ["english.spelling"],
+    "reading": ["english.vocabulary"],
+    "writing": ["english.punctuation", "english.word_classes", "english.affixes"],
+}
+
+FOCUS_DAYS = 14
+FOCUS_HALF_LIFE = 7
+W_TRICKY_TOPIC = 1.0
+W_TRICKY_SUBJECT = 0.4
+W_LOW_ENJOY = 0.2
+W_EASY = -0.3
+FOCUS_MIN, FOCUS_MAX = -1.0, 3.0
+
+
+def _all_skills() -> list[str]:
+    from . import ALL_SKILLS  # late import: engine package imports us indirectly
+
+    return ALL_SKILLS
+
+
+def default_skills_for(subject_id: str) -> list[str]:
+    spec = DEFAULT_SUBJECT_SKILLS.get(subject_id)
+    if spec is None:
+        return []
+    if isinstance(spec, str):
+        prefix = spec.rstrip("*")
+        return [s for s in _all_skills() if s.startswith(prefix)]
+    return list(spec)
+
+
+def topic_name(skill: str) -> str:
+    return skill.split(".", 1)[-1].replace("_", " ").capitalize()
+
+
+def ensure_subject_skills(journal: dict) -> bool:
+    """Give subjects saved before v1.4 their default topic links. Returns True if changed."""
+    changed = False
+    for sid, subject in journal["subjects"].items():
+        if "skills" not in subject:
+            subject["skills"] = default_skills_for(sid)
+            changed = True
+    return changed
+
+
 class JournalError(ValueError):
     """Raised for invalid journal input; ``code`` is sent to the card."""
 
@@ -66,6 +114,9 @@ def slugify(name: str) -> str:
     text = re.sub(r"[^a-z0-9\s/_-]", "", text)  # drop dots etc. so P.E. -> pe
     text = re.sub(r"[\s/_-]+", "_", text).strip("_")
     return text
+
+
+SEED_SUBJECT_IDS = frozenset(slugify(name) for name, _ in DEFAULT_SUBJECTS)
 
 
 def clean_name(name: str) -> str:
@@ -89,6 +140,7 @@ def _subject(name: str, emoji: str, created: str) -> dict:
         "created": created,
         "hidden": False,
         "merged_into": None,
+        "skills": default_skills_for(slugify(name)),
     }
 
 
@@ -156,7 +208,8 @@ def add_subject(journal: dict, name: str, emoji: str, created: str,
 
 
 def update_subject(journal: dict, subject_id: str, name: str | None = None,
-                   emoji: str | None = None, hidden: bool | None = None) -> dict:
+                   emoji: str | None = None, hidden: bool | None = None,
+                   skills: list[str] | None = None) -> dict:
     """Rename / re-emoji / hide. The id (slug) never changes, so history is safe."""
     subject = journal["subjects"].get(subject_id)
     if subject is None or subject.get("merged_into"):
@@ -173,6 +226,11 @@ def update_subject(journal: dict, subject_id: str, name: str | None = None,
         subject["emoji"] = emoji.strip()[:8] or subject["emoji"]
     if hidden is not None:
         subject["hidden"] = bool(hidden)
+    if skills is not None:
+        known = set(_all_skills())
+        if any(s not in known for s in skills):
+            raise JournalError("unknown_topic")
+        subject["skills"] = list(dict.fromkeys(skills))
     return subject
 
 
@@ -197,6 +255,11 @@ def merge_subject(journal: dict, src: str, dst: str) -> dict:
         entry["subjects"] = merged
     subjects[src]["merged_into"] = dst
     subjects[src]["hidden"] = True
+    # Keep any topic links the merged subject had.
+    dst_skills = subjects[dst].setdefault("skills", [])
+    for skill in subjects[src].get("skills", []):
+        if skill not in dst_skills:
+            dst_skills.append(skill)
     return subjects[dst]
 
 
@@ -235,12 +298,20 @@ def validate_entry(journal: dict, payload: dict, today: date) -> dict:
         difficulty = raw.get("difficulty")
         if difficulty is not None and difficulty not in DIFFICULTIES:
             raise JournalError("invalid_rating")
+        linked = set(journal["subjects"][sid].get("skills", []))
+        topics = []
+        for topic in raw.get("topics") or []:
+            if topic not in linked:
+                raise JournalError("unknown_topic")
+            if topic not in topics:
+                topics.append(topic)
         items.append(
             {
                 "id": sid,
                 "enjoy": enjoy,
                 "difficulty": difficulty,
                 "note": _text(raw.get("note"), MAX_NOTE),
+                "topics": topics,
             }
         )
     if len(items) > MAX_SUBJECTS_PER_ENTRY:
@@ -393,3 +464,65 @@ def distinct_subjects_logged(journal: dict) -> int:
             for item in entry.get("subjects", [])
         }
     )
+
+
+# ---------------------------------------------------------------- focus for the games
+
+
+def journal_focus(journal: dict, today: date) -> dict[str, float]:
+    """Per-skill practice weight from recent journal ratings.
+
+    Positive = she found it tricky (practise more), negative = easy.
+    Ratings fade with a one-week half-life and stop counting after 14 days.
+    """
+    weights: dict[str, float] = {}
+    cutoff = today - timedelta(days=FOCUS_DAYS)
+    for iso, entry in journal["entries"].items():
+        try:
+            day = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        if day <= cutoff or day > today:
+            continue
+        decay = 0.5 ** ((today - day).days / FOCUS_HALF_LIFE)
+        for item in entry.get("subjects", []):
+            subject = journal["subjects"].get(resolve(journal, item["id"]), {})
+            linked = subject.get("skills", [])
+            if not linked:
+                continue
+            topics = [t for t in item.get("topics") or [] if t in linked]
+            difficulty = item.get("difficulty")
+            if difficulty == "tricky":
+                if topics:
+                    for t in topics:
+                        weights[t] = weights.get(t, 0.0) + W_TRICKY_TOPIC * decay
+                else:
+                    for t in linked:
+                        weights[t] = weights.get(t, 0.0) + W_TRICKY_SUBJECT * decay
+            elif difficulty == "easy":
+                for t in topics or linked:
+                    weights[t] = weights.get(t, 0.0) + W_EASY * decay
+            if item.get("enjoy") in (1, 2):
+                for t in linked:
+                    weights[t] = weights.get(t, 0.0) + W_LOW_ENJOY * decay
+    return {
+        skill: round(max(FOCUS_MIN, min(FOCUS_MAX, w)), 3)
+        for skill, w in weights.items()
+        if abs(w) >= 0.01
+    }
+
+
+def tricky_reasons(journal: dict, today: date) -> dict[str, str]:
+    """Latest date each skill was flagged tricky in the last 14 days (for card copy)."""
+    out: dict[str, str] = {}
+    cutoff = (today - timedelta(days=FOCUS_DAYS)).isoformat()
+    for iso in sorted(journal["entries"]):
+        if iso <= cutoff:
+            continue
+        for item in journal["entries"][iso].get("subjects", []):
+            if item.get("difficulty") != "tricky":
+                continue
+            subject = journal["subjects"].get(resolve(journal, item["id"]), {})
+            for t in item.get("topics") or subject.get("skills", []):
+                out[t] = iso
+    return out

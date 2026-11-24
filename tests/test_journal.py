@@ -177,3 +177,87 @@ def test_journal_badges():
     assert "curious_mind" not in new
     entry["subjects"] = [{"id": s} for s in ("art", "music", "maths", "science", "french")]
     assert "curious_mind" in check_badges(data, {"trigger": "journal", "entry": entry})
+
+
+# ---------------------------------------------------------------- v1.4: topics & focus
+
+
+def test_seed_subjects_link_to_game_topics(jr):
+    assert "maths.fractions" in jr["subjects"]["maths"]["skills"]
+    assert all(s.startswith("maths.") for s in jr["subjects"]["maths"]["skills"])
+    assert jr["subjects"]["spelling"]["skills"] == ["english.spelling"]
+    assert jr["subjects"]["art"]["skills"] == []
+
+
+def test_ensure_subject_skills_migrates_old_subjects(jr):
+    for s in jr["subjects"].values():
+        del s["skills"]
+    assert J.ensure_subject_skills(jr) is True
+    assert jr["subjects"]["writing"]["skills"] == [
+        "english.punctuation", "english.word_classes", "english.affixes"]
+    assert J.ensure_subject_skills(jr) is False  # idempotent
+
+
+def test_topics_must_be_linked(jr):
+    body = J.validate_entry(jr, _payload(subjects=[
+        {"id": "maths", "difficulty": "tricky", "topics": ["maths.fractions", "maths.fractions"]}
+    ]), TODAY)
+    assert body["subjects"][0]["topics"] == ["maths.fractions"]
+    with pytest.raises(J.JournalError) as err:
+        J.validate_entry(jr, _payload(subjects=[
+            {"id": "maths", "topics": ["english.spelling"]}]), TODAY)
+    assert err.value.code == "unknown_topic"
+
+
+def test_update_subject_skills(jr):
+    J.add_subject(jr, "Piano", "🎹", "2026-11-24")
+    J.update_subject(jr, "piano", skills=["maths.fractions"])
+    assert jr["subjects"]["piano"]["skills"] == ["maths.fractions"]
+    with pytest.raises(J.JournalError):
+        J.update_subject(jr, "piano", skills=["maths.algebra"])
+
+
+def test_merge_keeps_topic_links(jr):
+    J.add_subject(jr, "Sums", "", "2026-11-20", force=True)
+    J.update_subject(jr, "sums", skills=["maths.addition"])
+    J.update_subject(jr, "art", skills=[])
+    J.merge_subject(jr, "sums", "art")
+    assert jr["subjects"]["art"]["skills"] == ["maths.addition"]
+
+
+def test_journal_focus_weights_and_decay(jr):
+    jr["entries"] = {
+        "2026-11-24": {"subjects": [
+            {"id": "maths", "difficulty": "tricky", "topics": ["maths.fractions"]},
+            {"id": "spelling", "difficulty": "easy"},
+        ]},
+        "2026-11-17": {"subjects": [  # a week old: half weight
+            {"id": "maths", "difficulty": "tricky", "topics": ["maths.fractions"]},
+        ]},
+        "2026-11-20": {"subjects": [  # tricky, no topic picked: spread thinly
+            {"id": "writing", "difficulty": "tricky", "enjoy": 2},
+        ]},
+        "2026-11-01": {"subjects": [  # older than 14 days: ignored
+            {"id": "maths", "difficulty": "tricky", "topics": ["maths.money"]},
+        ]},
+        "2026-11-23": {"subjects": [{"id": "art", "difficulty": "tricky"}]},  # unlinked
+    }
+    f = J.journal_focus(jr, TODAY)
+    assert f["maths.fractions"] == pytest.approx(1.5, abs=0.01)
+    assert f["english.spelling"] == pytest.approx(-0.3, abs=0.01)
+    decay = 0.5 ** (4 / 7)
+    assert f["english.punctuation"] == pytest.approx((0.4 + 0.2) * decay, abs=0.01)
+    assert "maths.money" not in f
+    assert "maths.addition" not in f
+    reasons = J.tricky_reasons(jr, TODAY)
+    assert reasons["maths.fractions"] == "2026-11-24"
+    assert "maths.money" not in reasons
+
+
+def test_journal_focus_is_clamped(jr):
+    jr["entries"] = {
+        f"2026-11-{d:02d}": {"subjects": [
+            {"id": "maths", "difficulty": "tricky", "topics": ["maths.decimals"]}]}
+        for d in range(15, 25)
+    }
+    assert J.journal_focus(jr, TODAY)["maths.decimals"] == J.FOCUS_MAX

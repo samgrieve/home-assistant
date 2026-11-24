@@ -64,7 +64,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     coordinator: ProfileCoordinator = hass.data[DOMAIN]["coordinators"][entry.entry_id]
-    coordinator._notify()
+    coordinator.on_options_updated()
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:

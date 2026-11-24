@@ -16,6 +16,16 @@ from __future__ import annotations
 from .journal import distinct_subjects_logged
 
 DEEP_THINKER_CHARS = 20
+GLOW_UP_LOW = 10
+GLOW_UP_HIGH = 50
+SHARP_FOCUS_ROUNDS = 5
+
+
+def _glow_up(d: dict) -> bool:
+    skills = d.get("skills", {})
+    return any(
+        skills.get(s, {}).get("mastery", 0) > GLOW_UP_HIGH for s in d.get("low_skills", [])
+    )
 
 
 def _deep_entry(entry: dict | None) -> bool:
@@ -174,6 +184,25 @@ BADGES: list[dict] = [
         "hint": "Finish every challenge in one week",
         "predicate": lambda d, c: (ch := d.get("weekly", {}).get("challenges"))
         and len(ch) >= 3 and all(x["done"] for x in ch),
+    },
+    {
+        "id": "topic_master", "name": "Topic Master", "icon": "🎓",
+        "desc": "Reach the top level in any topic",
+        "hint": "Keep practising one topic until it hits level 5",
+        "predicate": lambda d, c: any(
+            v.get("band", 1) >= 5 for v in d.get("skills", {}).values()),
+    },
+    {
+        "id": "glow_up", "name": "Glow Up", "icon": "🌸",
+        "desc": "Grow a topic from under 10% to over 50%",
+        "hint": "Pick a topic you find tricky and keep at it",
+        "predicate": lambda d, c: _glow_up(d),
+    },
+    {
+        "id": "sharp_focus", "name": "Sharp Focus", "icon": "🔍",
+        "desc": f"Finish {SHARP_FOCUS_ROUNDS} Today's Focus rounds",
+        "hint": "Play Today's Focus to practise your tricky bits",
+        "predicate": lambda d, c: d.get("focus_rounds", 0) >= SHARP_FOCUS_ROUNDS,
     },
     {
         "id": "dear_diary", "name": "Dear Diary", "icon": "📔",

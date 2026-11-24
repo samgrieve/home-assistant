@@ -21,6 +21,7 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 | 🛒 Shop Keeper — money: totals, change, coins, best value (UK £/p) | 🧱 Word Builder — prefixes, suffixes, root words |
 
 **Plus the Challenges row:**
+- 🎯 **Today's Focus** — a mixed round aimed at what she most needs: about 70% of questions come from her weakest topics, untried topics and anything she marked as *tricky* in her journal in the last fortnight. The other 30% are easy wins from her strongest topics, so it stays fun. The tile says why ("Fractions — you said it was tricky"), and the results show how each focus topic moved
 - 👾 **Boss Battle** — 10 questions drawn from her four weakest skills, at 1.5× XP, with a boss HP bar that drops with every correct answer. Score 7+ to make the boss flee!
 - 🐸 **Fly Snap** — a real-time arcade game: a frog sits on a lilypad with a word above it while six flies drift inward, each carrying a word. Tap the fly that matches (synonyms, antonyms or homophones). Survive 60 seconds to clear a round, beat 6 speeding-up rounds to win, and don't let a fly reach the lilypad — you have 3 lives.
 
@@ -32,6 +33,7 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 **📔 Learning Journal** (tap *My Journal* on the home screen)
 - Each day she ticks the subjects she did *outside* the games (12 starter subjects, add your own)
 - Every ticked subject gets a quick rating: how much she enjoyed it (5 faces) and how hard it was (Easy / OK / Tricky), plus an optional note
+- **Which bit was tricky?** If she marks Maths, Spelling, Reading or Writing as Tricky, she can tap the exact game topics (for example Fractions or Long multiplication). Those topics get extra practice in Today's Focus and come up a little more in the other games and the Boss Battle. Parents can link any subject to game topics in the 🗂️ Subjects manager
 - Three short prompts: *What did I do? What did I enjoy? What was easy or tricky?*
 - She can write about today or catch up on the last 2 days; older entries are locked
 - Adding a subject always shows the existing list first and asks "Did you mean Science?" for near-duplicates. Parents can rename, hide or **merge** subjects, and merging moves past entries across
@@ -39,11 +41,22 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 - +15 XP for her first entry each day. It does **not** count toward the daily question goal
 - Parents (set in the integration options) can react with a sticker and leave a note, and she sees "💌 Dad sent you ⭐" on her home screen
 
+**📅 Weekly summary**
+- `sensor.<name>_weekly_summary`: its state is the week's start date. Its attributes cover the week's questions, accuracy, days played, days the goal was met, XP, badges, topics that improved, topics that need work and topics not practised. They also include journal highlights (subjects, what she loved, what was tricky) and ready-made `parent_title` / `parent_text` / `kid_title` / `kid_text` for notifications. Her own journal writing is never included
+- The Statistics screen has a **This week** section, with a comparison against last week. The last 12 weeks are kept for trends
+- **🧩 All topics grid** (parents): every topic as a colour-coded tile, grouped into Maths and English with the weakest first. Each tile shows mastery, level, accuracy, this week's change, and 🧗 if she marked it tricky in her journal. It shows to everyone until parents are set in the options
+- Deep link `?lg=stats` opens Statistics directly
+
+**🎒 Grows with her**
+- Set her **School year** in the integration options. It moves up automatically every 1 September and appears in the card header, the summary and the `level` sensor's `school_year` attribute
+- Topics she hasn't tried yet start at the right level for her year. Bands she has already earned are never lowered
+- Today's question content spans roughly Years 4–6. Year 7 / KS3 content (algebra, ratio, harder spelling) is planned for a later release
+
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
-- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze
-- 27 badges to collect, per-skill mastery stars on every game tile
+- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze. One challenge each week targets a topic she most needs, chosen from her weakest topics and anything she marked as tricky in her journal: "Get 15 Fractions answers right" or "Raise Spelling by 5 points"
+- 30 badges to collect, including **Topic Master** 🎓 (any topic at the top level), **Glow Up** 🌸 (a topic that grew from under 10% to over 50%) and **Sharp Focus** 🔍 (5 Today's Focus rounds), per-skill mastery stars on every game tile
 - Adaptive difficulty: each of the 17 tracked skills moves up/down 5 bands automatically
 
 **For parents**
@@ -79,15 +92,35 @@ type: custom:learning-games-card
 # sounds: false      # turn off the bleeps
 ```
 
-4. *(Optional, for the journal)* **Settings → Devices & services → Learning
-   Games → Configure** and tick the Home Assistant users who are parents. They
-   can then react to and reply to journal entries, and manage the subject list.
+4. **Settings → Devices & services → Learning Games → Configure**: set her
+   **School year**, and tick the Home Assistant users who are parents. Parents
+   can react to and reply to journal entries, and manage the subject list.
 
 A panel-view dashboard works best on a tablet:
 Dashboard → ⋮ → Edit → ⋮ → *Raw configuration editor*, or just place the card
 in a single-column view.
 
 ## Reward automation recipes
+
+**Sunday summary** (send `kid_title`/`kid_text` to her own devices in a second action):
+
+```yaml
+automation:
+  - alias: Learning Games - Sunday summary (parents)
+    triggers:
+      - trigger: time
+        at: "18:00:00"
+    conditions:
+      - condition: time
+        weekday: sun
+    actions:
+      - action: notify.mobile_app_parent_phone
+        data:
+          title: "{{ state_attr('sensor.maya_s_learning_games_weekly_summary', 'parent_title') }}"
+          message: "{{ state_attr('sensor.maya_s_learning_games_weekly_summary', 'parent_text') }}"
+          data:
+            url: /learning-games/0?lg=stats
+```
 
 **Notify parents when a journal entry is written** (tapping the notification
 opens that entry in the card):

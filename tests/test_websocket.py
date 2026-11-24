@@ -59,7 +59,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     assert msg["success"]
     stats = msg["result"]
     assert stats["daily"]["goal"] == 5
-    assert len(stats["modes"]) == 11
+    assert len(stats["modes"]) == 12
     assert len(stats["skills"]) == 17
     assert len(stats["challenges"]) == 3
     assert stats["arcade"]["games"] == 0
@@ -70,7 +70,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert msg["result"]["earned"] == []
-    assert len(msg["result"]["locked"]) == 27
+    assert len(msg["result"]["locked"]) == 30
 
 
 async def test_get_statistics_empty_profile(hass: HomeAssistant, hass_ws_client):
@@ -577,3 +577,178 @@ async def test_journal_review_requires_parent(
     assert (await kid.receive_json())["error"]["code"] == "not_parent"
     await parent.send_json({"id": 3, **merge})
     assert (await parent.receive_json())["success"]
+
+
+# ---------------------------------------------------------------- v1.4: focus & summary
+
+
+async def test_tricky_journal_topic_drives_todays_focus(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    j = (await client.receive_json())["result"]
+    maths = next(s for s in j["subjects"] if s["id"] == "maths")
+    assert "maths.fractions" in maths["skills"]
+    assert j["topics"]["maths.long_multiplication"] == "Long multiplication"
+
+    await client.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": j["today"],
+        "subjects": [{"id": "maths", "enjoy": 2, "difficulty": "tricky",
+                      "topics": ["maths.fractions"]}],
+    })
+    assert (await client.receive_json())["success"]
+
+    await client.send_json({"id": 3, "type": f"{DOMAIN}/get_stats", "profile_id": pid})
+    stats = (await client.receive_json())["result"]
+    assert stats["focus"][0]["skill"] == "maths.fractions"
+    assert stats["focus"][0]["reason"] == "tricky"
+    assert stats["school_year"] == 5
+    assert "todays_focus" in stats["modes"]
+
+    # A full Today's Focus round runs end to end and leans on fractions.
+    await client.send_json({"id": 4, "type": f"{DOMAIN}/start_session",
+                            "profile_id": pid, "mode": "todays_focus", "length": 10})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    session_id = msg["result"]["session_id"]
+    question = msg["result"]["question"]
+    for i in range(10):
+        await client.send_json({
+            "id": 10 + i, "type": f"{DOMAIN}/submit_answer", "profile_id": pid,
+            "session_id": session_id, "question_id": question["question_id"],
+            "answer": "0", "elapsed_ms": 4000,
+        })
+        res = (await client.receive_json())["result"]
+        question = res.get("next_question")
+    assert res["results"]["mode"] == "todays_focus"
+    assert res["results"]["total"] == 10
+
+
+async def test_weekly_summary_sensor(hass: HomeAssistant, hass_ws_client):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    today = (await client.receive_json())["result"]["today"]
+    await client.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid,
+        "date": today, "did": "Secret diary words",
+        "subjects": [{"id": "art", "enjoy": 5}, {"id": "maths", "difficulty": "tricky",
+                                                 "topics": ["maths.decimals"]}],
+    })
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.maya_s_learning_games_weekly_summary")
+    attrs = state.attributes
+    assert state.state == attrs["week_start"]
+    assert attrs["journal"]["entries"] == 1
+    assert attrs["journal"]["favourite"] == "Art"
+    assert attrs["journal"]["trickiest"] == "Maths"
+    assert attrs["journal"]["tricky_topics"] == ["Decimals"]
+    assert attrs["journal"]["new_subjects"] == []
+    assert "Dear Diary" in attrs["badges"]
+    assert attrs["needs_work"][0]["name"] == "Decimals"
+    assert "Maya's week" in attrs["parent_title"]
+    assert "found Maths (Decimals) tricky" in attrs["parent_text"]
+    assert "wrote in your journal 1 time" in attrs["kid_text"]
+    assert "Secret diary words" not in str(attrs)  # her writing never leaves the card
+
+    await client.send_json({"id": 3, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await client.receive_json())["result"]
+    assert st["week"]["journal"]["entries"] == 1
+
+
+async def test_topic_challenges_progress_and_focus_rounds(hass: HomeAssistant, hass_ws_client):
+    from custom_components.learning_games.engine import challenges as ch
+
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    c = hass.data[DOMAIN]["coordinators"][pid]
+    weekly = c.data["weekly"]
+    # Fresh profiles already get one topic challenge.
+    assert sum(1 for x in weekly["challenges"] if x["type"] in ch.TOPIC_TYPES) == 1
+
+    ws = weekly["week_start"]
+    weekly["challenges"] = [
+        {"id": f"{ws}-topic_correct", "type": "topic_correct", "target": 10,
+         "progress": 0, "done": False, "skill": "maths.times_tables"},
+        {"id": f"{ws}-topic_raise", "type": "topic_raise", "target": 5,
+         "progress": 0, "done": False, "skill": "english.spelling", "start": 0.0},
+        {"id": f"{ws}-xp", "type": "xp", "target": 99999, "progress": 0, "done": False},
+    ]
+    client = await hass_ws_client(hass)
+
+    async def play(mode, rid):
+        await client.send_json({"id": rid, "type": f"{DOMAIN}/start_session",
+                                "profile_id": pid, "mode": mode, "length": 10})
+        res = (await client.receive_json())["result"]
+        sid, q = res["session_id"], res["question"]
+        for i in range(10):
+            sess = c.sessions[sid]
+            await client.send_json({
+                "id": rid + 1 + i, "type": f"{DOMAIN}/submit_answer", "profile_id": pid,
+                "session_id": sid, "question_id": q["question_id"],
+                "answer": sess.current.answer, "elapsed_ms": 2000,
+            })
+            r = (await client.receive_json())["result"]
+            q = r.get("next_question")
+        return r
+
+    await play("times_tables_blitz", 100)
+    await play("word_wizard", 200)  # vocabulary: must not count for times tables
+    topic_correct = weekly["challenges"][0]
+    assert topic_correct["progress"] == 10 and topic_correct["done"] is True
+
+    c.skills["english.spelling"].mastery = 6.4
+    await play("spelling_star", 300)
+    raise_ch = weekly["challenges"][1]
+    # 10 right answers lift spelling well past +5: completed, then it stops tracking.
+    assert raise_ch["done"] is True and raise_ch["progress"] >= 5
+
+    await play("todays_focus", 400)
+    assert c.data["focus_rounds"] == 1
+    await hass.async_block_till_done()
+    attrs = hass.states.get(
+        "sensor.maya_s_learning_games_weekly_challenges_done").attributes
+    assert attrs["challenges"][0]["skill"] == "maths.times_tables"
+    assert attrs["challenges"][0]["desc"] == "Get 10 Times tables answers right"
+    assert set(attrs["challenges"][2]) == {
+        "id", "type", "name", "icon", "desc", "target", "progress", "done"}
+
+
+async def test_statistics_mastery_grid_fields(
+    hass: HomeAssistant, hass_ws_client, hass_admin_user, hass_read_only_access_token
+):
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    c = hass.data[DOMAIN]["coordinators"][pid]
+    kid = await hass_ws_client(hass, access_token=hass_read_only_access_token)
+    await kid.send_json({"id": 1, "type": f"{DOMAIN}/journal/get", "profile_id": pid})
+    today = (await kid.receive_json())["result"]["today"]
+    await kid.send_json({
+        "id": 2, "type": f"{DOMAIN}/journal/save_entry", "profile_id": pid, "date": today,
+        "subjects": [{"id": "maths", "difficulty": "tricky", "topics": ["maths.decimals"]}],
+    })
+    assert (await kid.receive_json())["success"]
+    c.skills["maths.money"].mastery = c.data["weekly"]["mastery_start"]["maths.money"] + 7
+
+    await kid.send_json({"id": 3, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await kid.receive_json())["result"]
+    by = {s["skill"]: s for s in st["skills"]}
+    assert len(by) == 17
+    assert by["maths.decimals"]["flagged"] is True
+    assert by["maths.money"]["flagged"] is False
+    assert by["maths.money"]["week_change"] == 7
+    assert by["maths.long_multiplication"]["name"] == "Long multiplication"
+    assert st["is_parent"] is False and st["parents_configured"] is False
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "parent_users": [hass_admin_user.id]})
+    await hass.async_block_till_done()
+    parent = await hass_ws_client(hass)
+    await parent.send_json({"id": 1, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
+    st = (await parent.receive_json())["result"]
+    assert st["is_parent"] is True and st["parents_configured"] is True
