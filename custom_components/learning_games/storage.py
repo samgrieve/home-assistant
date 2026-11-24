@@ -33,6 +33,8 @@ def default_data(name: str, avatar: str, created: str) -> dict:
         "arcade": {"games": 0, "wins": 0, "best_round": 0, "categories_won": []},
         "journal": default_journal(created),
         "weekly_history": [],  # compact summaries of finished weeks, newest last
+        "low_skills": [],      # topics ever seen under 10% mastery (Glow Up badge)
+        "focus_rounds": 0,     # Today's Focus rounds completed
     }
 
 

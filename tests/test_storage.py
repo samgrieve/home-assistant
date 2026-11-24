@@ -208,3 +208,9 @@ async def test_school_year_lifts_only_untouched_skills(hass: HomeAssistant):
     assert coordinator.skills["maths.fractions"].band == 3
     state = hass.states.get("sensor.maya_s_learning_games_level")
     assert state.attributes["school_year"] == 5
+
+
+async def test_low_skills_recorded_on_load(hass: HomeAssistant):
+    coordinator = await make_coordinator(hass)
+    assert set(coordinator.data["low_skills"]) == set(ALL_SKILLS)  # all start at 0%
+    assert coordinator.data["focus_rounds"] == 0

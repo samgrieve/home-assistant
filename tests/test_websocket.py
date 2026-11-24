@@ -70,7 +70,7 @@ async def test_get_stats_and_badges(hass: HomeAssistant, hass_ws_client):
     msg = await client.receive_json()
     assert msg["success"]
     assert msg["result"]["earned"] == []
-    assert len(msg["result"]["locked"]) == 27
+    assert len(msg["result"]["locked"]) == 30
 
 
 async def test_get_statistics_empty_profile(hass: HomeAssistant, hass_ws_client):
@@ -659,3 +659,61 @@ async def test_weekly_summary_sensor(hass: HomeAssistant, hass_ws_client):
     await client.send_json({"id": 3, "type": f"{DOMAIN}/get_statistics", "profile_id": pid})
     st = (await client.receive_json())["result"]
     assert st["week"]["journal"]["entries"] == 1
+
+
+async def test_topic_challenges_progress_and_focus_rounds(hass: HomeAssistant, hass_ws_client):
+    from custom_components.learning_games.engine import challenges as ch
+
+    entry = await setup_profile(hass)
+    pid = entry.entry_id
+    c = hass.data[DOMAIN]["coordinators"][pid]
+    weekly = c.data["weekly"]
+    # Fresh profiles already get one topic challenge.
+    assert sum(1 for x in weekly["challenges"] if x["type"] in ch.TOPIC_TYPES) == 1
+
+    ws = weekly["week_start"]
+    weekly["challenges"] = [
+        {"id": f"{ws}-topic_correct", "type": "topic_correct", "target": 10,
+         "progress": 0, "done": False, "skill": "maths.times_tables"},
+        {"id": f"{ws}-topic_raise", "type": "topic_raise", "target": 5,
+         "progress": 0, "done": False, "skill": "english.spelling", "start": 0.0},
+        {"id": f"{ws}-xp", "type": "xp", "target": 99999, "progress": 0, "done": False},
+    ]
+    client = await hass_ws_client(hass)
+
+    async def play(mode, rid):
+        await client.send_json({"id": rid, "type": f"{DOMAIN}/start_session",
+                                "profile_id": pid, "mode": mode, "length": 10})
+        res = (await client.receive_json())["result"]
+        sid, q = res["session_id"], res["question"]
+        for i in range(10):
+            sess = c.sessions[sid]
+            await client.send_json({
+                "id": rid + 1 + i, "type": f"{DOMAIN}/submit_answer", "profile_id": pid,
+                "session_id": sid, "question_id": q["question_id"],
+                "answer": sess.current.answer, "elapsed_ms": 2000,
+            })
+            r = (await client.receive_json())["result"]
+            q = r.get("next_question")
+        return r
+
+    await play("times_tables_blitz", 100)
+    await play("word_wizard", 200)  # vocabulary: must not count for times tables
+    topic_correct = weekly["challenges"][0]
+    assert topic_correct["progress"] == 10 and topic_correct["done"] is True
+
+    c.skills["english.spelling"].mastery = 6.4
+    await play("spelling_star", 300)
+    raise_ch = weekly["challenges"][1]
+    # 10 right answers lift spelling well past +5: completed, then it stops tracking.
+    assert raise_ch["done"] is True and raise_ch["progress"] >= 5
+
+    await play("todays_focus", 400)
+    assert c.data["focus_rounds"] == 1
+    await hass.async_block_till_done()
+    attrs = hass.states.get(
+        "sensor.maya_s_learning_games_weekly_challenges_done").attributes
+    assert attrs["challenges"][0]["skill"] == "maths.times_tables"
+    assert attrs["challenges"][0]["desc"] == "Get 10 Times tables answers right"
+    assert set(attrs["challenges"][2]) == {
+        "id", "type", "name", "icon", "desc", "target", "progress", "done"}

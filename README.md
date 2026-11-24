@@ -54,8 +54,8 @@ bands based on accuracy and speed, so it stays challenging as she grows.
 **Progression & engagement**
 - XP for every answer, speed bonuses, streak bonuses, levels
 - Daily goal (configurable) and a daily streak with ❄️ streak-freeze tokens
-- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze
-- 27 badges to collect, per-skill mastery stars on every game tile
+- **3 weekly challenges** (deterministic per week, e.g. "Score 10/10 in 2 rounds") worth +100 XP each — complete all three for a bonus streak freeze. One challenge each week targets a topic she most needs, chosen from her weakest topics and anything she marked as tricky in her journal: "Get 15 Fractions answers right" or "Raise Spelling by 5 points"
+- 30 badges to collect, including **Topic Master** 🎓 (any topic at the top level), **Glow Up** 🌸 (a topic that grew from under 10% to over 50%) and **Sharp Focus** 🔍 (5 Today's Focus rounds), per-skill mastery stars on every game tile
 - Adaptive difficulty: each of the 17 tracked skills moves up/down 5 bands automatically
 
 **For parents**

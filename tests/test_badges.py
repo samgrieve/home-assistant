@@ -117,7 +117,7 @@ def test_earned_badges_not_re_earned():
 
 
 def test_badge_metadata_complete():
-    assert len(BADGES) == 27
+    assert len(BADGES) == 30
     for badge in BADGES:
         for key in ("id", "name", "icon", "desc", "hint", "predicate"):
             assert badge[key], f"{badge['id']} missing {key}"
@@ -125,3 +125,25 @@ def test_badge_metadata_complete():
     assert "hint" in public and "ts" not in public
     public = badge_public("perfect_10", "2026-01-01T00:00:00")
     assert public["ts"] and "hint" not in public
+
+
+def test_topic_master_glow_up_and_sharp_focus():
+    from custom_components.learning_games.storage import default_data
+
+    data = default_data("Maya", "fox", "2026-11-24")
+    new = check_badges(data, {"trigger": "answer"})
+    assert not {"topic_master", "glow_up", "sharp_focus"} & set(new)
+
+    data["skills"]["english.homophones"]["band"] = 5
+    assert "topic_master" in check_badges(data, {"trigger": "answer"})
+
+    # High mastery alone isn't a glow-up: the topic must once have been under 10%.
+    data["skills"]["maths.fractions"]["mastery"] = 60
+    assert "glow_up" not in check_badges(data, {"trigger": "answer"})
+    data["low_skills"] = ["maths.fractions"]
+    assert "glow_up" in check_badges(data, {"trigger": "answer"})
+
+    data["focus_rounds"] = 4
+    assert "sharp_focus" not in check_badges(data, {"trigger": "round"})
+    data["focus_rounds"] = 5
+    assert "sharp_focus" in check_badges(data, {"trigger": "round"})

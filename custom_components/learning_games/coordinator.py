@@ -46,7 +46,7 @@ from .engine import (
     focus_ranking,
     journal,
 )
-from .engine.badges import badge_public, check_badges
+from .engine.badges import GLOW_UP_LOW, badge_public, check_badges
 from .engine.models import SkillState
 from .engine.session import GameSession, SessionError
 from .engine.wordlists import WordBanks
@@ -153,6 +153,7 @@ class ProfileCoordinator:
             for skill in ALL_SKILLS
         }
         journal.ensure_subject_skills(self.data["journal"])
+        self._track_low_skills()
         self._apply_starting_bands()
         self._check_rollover()
         # A few seconds past midnight: roll the day over even while idle.
@@ -229,8 +230,14 @@ class ProfileCoordinator:
         expected_prefix = weekly["week_start"]
         current = weekly.get("challenges") or []
         if not current or not all(c["id"].startswith(expected_prefix) for c in current):
+            # Her weakest / journal-flagged topics shape one challenge each week.
             weekly["challenges"] = challenges.generate_week(
-                expected_prefix, self.profile_id
+                expected_prefix,
+                self.profile_id,
+                focus_skills=focus_ranking(self.skills, self.journal_focus())[
+                    : challenges.TOPIC_POOL
+                ],
+                mastery={s: st.mastery for s, st in self.skills.items()},
             )
 
     def _bump_challenges(self, events: list, deltas: dict[str, int]) -> None:
@@ -241,6 +248,14 @@ class ProfileCoordinator:
                 continue
             if challenge["type"] == "modes":
                 challenge["progress"] = len(set(weekly["modes_played"]))
+            elif challenge["type"] == "topic_correct":
+                challenge["progress"] += deltas.get(f"correct:{challenge['skill']}", 0)
+            elif challenge["type"] == "topic_raise":
+                state = self.skills.get(challenge["skill"])
+                if state is not None:
+                    challenge["progress"] = max(
+                        0, int(state.mastery - challenge.get("start", 0.0))
+                    )
             elif challenge["type"] in deltas:
                 challenge["progress"] += deltas[challenge["type"]]
             if challenge["progress"] >= challenge["target"]:
@@ -506,6 +521,7 @@ class ProfileCoordinator:
             deltas["correct"] = 1
             subject = outcome.skill.split(".", 1)[0]
             deltas[f"{subject}_correct"] = 1
+            deltas[f"correct:{outcome.skill}"] = 1
         if outcome.speed_bonus:
             deltas["speed"] = 1
         self._bump_challenges(events, deltas)
@@ -587,6 +603,8 @@ class ProfileCoordinator:
         )
         del history[:-MAX_HISTORY]
 
+        if session.mode_id == "todays_focus":
+            self.data["focus_rounds"] = self.data.get("focus_rounds", 0) + 1
         if session.mode_id == "boss_battle":
             round_dict["boss_defeated"] = round_dict["correct"] >= BOSS_DEFEAT_THRESHOLD
 
@@ -645,7 +663,15 @@ class ProfileCoordinator:
             return True
         return False
 
+    def _track_low_skills(self) -> None:
+        """Remember topics that have ever been under 10% (for the Glow Up badge)."""
+        lows = self.data.setdefault("low_skills", [])
+        for skill, state in self.skills.items():
+            if state.mastery < GLOW_UP_LOW and skill not in lows:
+                lows.append(skill)
+
     def _check_badges(self, ctx: dict, events) -> list[str]:
+        self._track_low_skills()
         self._sync_skills()
         new = check_badges(self.data, ctx)
         now_iso = dt_util.now().isoformat()
